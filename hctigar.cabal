@@ -36,10 +36,15 @@ Executable vvt-opt
   
 Executable vvt
   Main-Is:              bin/Main.hs
-  Build-Depends:        process,filepath
+  Build-Depends:        process,filepath,yaml
   GHC-Options:          -threaded
 
 Executable vvt-svcomp
   Extensions:           ScopedTypeVariables,ViewPatterns
   Main-Is:              bin/SVComp.hs
   GHC-Options:          -threaded
+
+Executable bench
+  Main-Is:              bench/Main.hs
+  Build-Depends:        turtle, yaml
+  GHC-Options:          -Wall

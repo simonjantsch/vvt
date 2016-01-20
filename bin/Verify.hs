@@ -26,7 +26,7 @@ defaultOptions = Options { optBackends = defaultBackendOptions
                          , optShowHelp = False
                          , optTimeout = Nothing
                          , optVerbosity = 0
-                         , optStats = False
+                         , optStats = True
                          , optDumpDomain = Nothing
                          }
 

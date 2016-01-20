@@ -1,6 +1,7 @@
 {-# LANGUAGE ExistentialQuantification,FlexibleContexts,RankNTypes,
              ScopedTypeVariables,PackageImports,GADTs,DeriveDataTypeable,
              ViewPatterns,MultiParamTypeClasses #-}
+{-# LANGUAGE DeriveGeneric#-}
 module CTIGAR where
 
 import qualified Realization as TR
@@ -23,6 +24,8 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Vector as Vec
 import qualified Data.IntSet as IntSet
+import qualified Data.Yaml as Y
+import GHC.Generics
 import Data.IORef
 import Control.Monad (when)
 import Control.Applicative (Applicative(..))
@@ -102,6 +105,33 @@ data IC3Stats = IC3Stats { startTime :: UTCTime
                          , numRefinements :: Int
                          , numAddPreds :: Int
                          }
+
+data IC3MachineReadbleStats =
+    IC3MachineReadableStats
+    { mrs_consecutionTime :: Float
+    , mrs_consecutionNum :: Int
+    , mrs_domainTime :: Float
+    , mrs_domainNum :: Int
+    , mrs_interpolationTime :: Float
+    , mrs_interpolationNum :: Int
+    , mrs_liftingTime :: Float
+    , mrs_liftingNum :: Int
+    , mrs_initiationTime :: Float
+    , mrs_initiationNum :: Int
+    , mrs_numErased :: Int
+    , mrs_numCTI :: Int
+    , mrs_numUnliftedErased :: Int
+    , mrs_numCTG :: Int
+    , mrs_numMIC :: Int
+    , mrs_numCoreReduced :: Int
+    , mrs_numAbortJoin :: Int
+    , mrs_numAbortMic :: Int
+    , mrs_numRefinements :: Int
+    , mrs_numAddPreds :: Int
+    , mrs_numPreds :: Int
+    } deriving (Show, Generic)
+
+instance Y.ToJSON IC3MachineReadbleStats
 
 data InterpolationState mdl = InterpolationState { interpCur :: TR.State mdl
                                                  , interpNxt :: TR.State mdl
@@ -1623,6 +1653,31 @@ ic3DumpStats fp = do
        putStrLn $ "% unlifted: "++
          (show $ (round $ 100*(fromIntegral $ numUnliftedErased stats) /
                   (fromIntegral $ numErased stats) :: Int))
+
+       let mrsStats =
+               IC3MachineReadableStats { mrs_consecutionTime = realToFrac consTime
+                                       , mrs_consecutionNum = consNum
+                                       , mrs_domainTime = realToFrac domTime
+                                       , mrs_domainNum = domNum
+                                       , mrs_interpolationTime = realToFrac interpTime
+                                       , mrs_interpolationNum = interpNum
+                                       , mrs_liftingTime = realToFrac liftTime
+                                       , mrs_liftingNum = liftNum
+                                       , mrs_initiationTime = realToFrac initTime
+                                       , mrs_initiationNum = initNum
+                                       , mrs_numErased = numErased stats
+                                       , mrs_numCTI = numCTI stats
+                                       , mrs_numUnliftedErased = numUnliftedErased stats
+                                       , mrs_numCTG = numCTG stats
+                                       , mrs_numMIC = numMIC stats
+                                       , mrs_numCoreReduced = numCoreReduced stats
+                                       , mrs_numAbortJoin = numAbortJoin stats
+                                       , mrs_numAbortMic = numAbortMic stats
+                                       , mrs_numRefinements = numRefinements stats
+                                       , mrs_numAddPreds = numAddPreds stats
+                                       , mrs_numPreds = numPreds}
+
+       Y.encodeFile "./stats.yaml" mrsStats
    Nothing -> return ()
   dumpDomain <- asks ic3DumpDomainFile
   case dumpDomain of

@@ -57,11 +57,11 @@ performAction :: (Action,Options) -> IO ()
 performAction (Encode fn,opts) = do
   outp <- openFile (replaceExtension fn "l") WriteMode
   (inp,_) <- compile opts fn
-  ph <- execPipe inp outp [progOptimize
-                          ,progEncode
-                          ,progSimplify
-                          ,progPredicates (karrAnalysis opts)
-                          ,progPretty]
+  ph <- execPipe inp stdout [progOptimize
+                            ,progEncode
+                            ,progSimplify
+                            ,progPredicates (karrAnalysis opts)
+                            ,progPretty]
   waitForProcess ph
   return ()
 performAction (ShowLLVM fn,opts) = do

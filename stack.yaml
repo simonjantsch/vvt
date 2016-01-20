@@ -24,8 +24,3 @@ extra-deps:
 - pqueue-1.3.1
 - smtlib2-0.3
 
-#extra-include-dirs:
-#- /home/simon/devel/llvm/clang+llvm-3.5.0-x86_64-linux-gnu/include
-
-#extra-lib-dirs:
-#- /home/simon/devel/llvm/clang+llvm-3.5.0-x86_64-linux-gnu/lib
