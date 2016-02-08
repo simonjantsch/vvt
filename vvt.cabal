@@ -97,3 +97,8 @@ executable vvt
   Main-Is:              Main.hs
   Build-Depends:        base,process,filepath
   GHC-Options:          -threaded
+
+executable bench
+  Main-Is:              bench/Main.hs
+  Build-Depends:        base, text, bytestring, turtle, yaml
+  GHC-Options:          -Wall
