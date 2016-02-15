@@ -100,5 +100,5 @@ executable vvt
 
 executable bench
   Main-Is:              bench/Main.hs
-  Build-Depends:        base, text, bytestring, turtle, yaml
+  Build-Depends:        base, text, bytestring, turtle, yaml, system-filepath
   GHC-Options:          -Wall
