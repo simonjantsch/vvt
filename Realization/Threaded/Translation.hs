@@ -80,7 +80,10 @@ toLispProgram rel = trace ("Reverse state: "++show stateSt) $
       notAsserts <- mapM (\e -> let ne = translateLLVMExpr inpSt stateSt gtTrans e
                                 in not' ne
                          ) (llvmAssertions rel)
-      or' notAsserts
+      case notAsserts of
+        [] -> false
+        [x] -> return x
+        _ -> or' notAsserts
     threadNames = Map.fromList [ (th,"thread"++show n)
                                | (th,n) <- zip (Map.keys $ threadStateDesc $ llvmStateDesc rel)
                                            [1..] ]
@@ -228,7 +231,7 @@ reverseNext threadNames inp st gts next
     mainBlks++thBlks++
     mainVals++thVals++
     thActs++thArgs++thRets++
-    globals
+    globals++mainLocals++thLocals
   where
     mainBlks = [ (mainBlkName blk)
                  :=> (L.LispConstr $ L.LispValue (L.Size Nil Nil) $
@@ -286,6 +289,22 @@ reverseNext threadNames inp st gts next
                          in (globalName sz tps loc) :=>
                             (L.LispConstr rval)
               | (loc,val) <- Map.toList $ memory next ]
+    mainLocals = [ fromAllocVal' val $
+                   \val' -> let (sz,tps) = L.lispValueType val'
+                                rval = runIdentity $ foldExprs
+                                       (\_ -> return . translateLLVMExpr inp st gts) val'
+                            in (localName Nothing sz tps loc) :=>
+                               (L.LispConstr rval)
+                 | (loc,val) <- Map.toList $ threadGlobals $ mainState next ]
+    thLocals = [ fromAllocVal' val $
+                 \val' -> let (sz,tps) = L.lispValueType val'
+                              rval = runIdentity $ foldExprs
+                                     (\_ -> return . translateLLVMExpr inp st gts) val'
+                          in (localName (Just tname) sz tps loc) :=>
+                             (L.LispConstr rval)
+               | (th,(_,thD)) <- Map.toList $ threadState next
+               , let Just tname = Map.lookup th threadNames
+               , (loc,val) <- Map.toList $ threadGlobals thD ]
 
 reverseState :: Map (Ptr CallInst) String -> ProgramStateDesc
              -> (DMap L.LispName L.Annotation,ProgramState L.LispExpr)
@@ -463,12 +482,12 @@ reverseInput threadNames desc = (DMap.unions [mp1,mp2,mp3],st)
           | (th,thName) <- Map.toList threadNames ]
     mp2 = DMap.fromList [ toLispType tp $
                           \tps -> (L.LispName Nil tps
-                                   (T.pack $ "main-"++showValue i ""))
+                                   (T.pack $ "input-main-"++showValue i ""))
                                   :=> (L.Annotation Map.empty)
                         | (i,tp) <- Map.toList (nondetTypes $ mainInputDesc desc)]
     mp3 = DMap.fromList [ toLispType tp $
                           \tps -> (L.LispName Nil tps
-                                   (T.pack $ tname++"-"++showValue i ""))
+                                   (T.pack $ "input-"++tname++"-"++showValue i ""))
                                   :=> (L.Annotation Map.empty)
                         | (th,thd) <- Map.toList $ threadInputDesc desc
                         , let Just tname = Map.lookup th threadNames
@@ -483,7 +502,7 @@ reverseInput threadNames desc = (DMap.unions [mp1,mp2,mp3],st)
                                        (\(tps::Struct Repr tps) rev
                                         -> let var :: L.LispVar L.LispExpr '( '[],tps)
                                                var = L.NamedVar (L.LispName Nil tps
-                                                                 (T.pack $ "main-"++
+                                                                 (T.pack $ "input-main-"++
                                                                   showValue i "")) L.Input
                                            in case rev of
                                            L.RevVar idx
@@ -506,7 +525,7 @@ reverseInput threadNames desc = (DMap.unions [mp1,mp2,mp3],st)
                                                          -> let var :: L.LispVar L.LispExpr '( '[],tps)
                                                                 var = L.NamedVar
                                                                       (L.LispName Nil tps
-                                                                       (T.pack $ tname++"-"++
+                                                                       (T.pack $ "input-"++tname++"-"++
                                                                         showValue i "")) L.Input
                                                             in case rev of
                                                             L.RevVar idx
