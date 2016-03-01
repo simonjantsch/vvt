@@ -13,8 +13,8 @@ import Language.SMTLib2.Internals.Type
 import Language.SMTLib2.Internals.Interface hiding (constant)
 import qualified Language.SMTLib2.Internals.Interface as I
 import Language.SMTLib2.Internals.Embed
-import "mtl" Control.Monad.State (runStateT,modify)
-import "mtl" Control.Monad.Trans (lift)
+import "mtl" Control.Monad.State (runStateT,modify, get)
+import "mtl" Control.Monad.Trans (lift, liftIO, MonadIO)
 import Prelude hiding (mapM,sequence)
 import Data.Traversable (mapM,sequence)
 import Data.GADT.Show
@@ -22,14 +22,11 @@ import Data.GADT.Compare
 import qualified Data.Text as T
 
 import GHC.Generics as G
-import Data.Aeson as A
 
 newtype CollectedStates =
     CollectedStates
     { unpackCollectedStates :: Map T.Text [[Either Bool Integer]] }
     deriving G.Generic
-
-instance A.ToJSON CollectedStates
 
 data RSMState loc var = RSMState { rsmLocations :: Map loc (RSMLoc var)
                                  , rsmStates :: CollectedStates
@@ -84,7 +81,8 @@ notAllZero coeffs = do
                    | c <- Map.elems (coeffsVar coeffs) ]
   embed $ OrLst args
 
-createLine :: (Backend b,Ord var) => Coeffs b var -> Map var Integer -> SMT b (Expr b BoolType)
+createLine :: (Backend b,Ord var, MonadIO (SMTMonad b))
+              => Coeffs b var -> Map var Integer -> SMT b (Expr b BoolType)
 createLine coeffs vars = do
   lhs <- case Map.elems $ Map.intersectionWith (\c i -> do
                                                    i' <- constant (IntValueC i)
@@ -95,9 +93,11 @@ createLine coeffs vars = do
            rxs <- sequence xs
            embed $ PlusLst rxs
   let rhs = coeffsConst coeffs
-  embed $ lhs :==: rhs
+      line = lhs :==: rhs
+  liftIO $ putStrLn (show line)
+  embed $ line
 
-createLines :: (Backend b,Ord var) => Coeffs b var -> Set (Map var Integer)
+createLines :: (Backend b,Ord var, MonadIO (SMTMonad b)) => Coeffs b var -> Set (Map var Integer)
                -> SMT b (Map (ClauseId b) (Map var Integer))
 createLines coeffs points = do
   res <- mapM (\point -> do
@@ -160,59 +160,76 @@ extractLine coeffs = do
                  | (var,IntValueC val) <- Map.toList rcoeffs
                  , val/=0 ])
 
-mineStates :: (Backend b,SMTMonad b ~ IO,Ord var) => IO b -> RSMState loc var
+mineStates :: (Backend b,SMTMonad b ~ IO,Ord var, Show var) => IO b -> RSMState loc var
               -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
 mineStates backend st
   = runStateT
     (do
         nlocs <- mapM (\loc -> do
-                          ncls <- sequence $
+                          _ <- sequence $
                                   Map.mapWithKey
                                   (\vars cls -> do
-                                      res <- lift $ mineClass vars cls
-                                      case res of
-                                        Nothing -> return cls
-                                        Just (ncls,nprops) -> do
-                                          modify (nprops++)
-                                          return ncls)
-                                  (rsmClasses loc)
-                          return $ RSMLoc ncls
+                                      res@(ncls, nprops) <- lift $ mineClass vars cls
+                                      props <- get
+                                      liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
+                                      modify (nprops++)
+                                      return ncls
+                                  )(rsmClasses loc)
+                          return loc
                       ) (rsmLocations st)
         return $ RSMState nlocs (rsmStates st)
     ) []
   where
     mineClass vars cls
-      | Set.size cls <= 2 = return Nothing
-      | Set.size cls > 6 = return $ Just (Set.empty,[])
+      | Set.size cls <= 2 = return (vars, [])
+      | Set.size cls > 6 = return (Set.empty,[])
     mineClass vars cls = do
-      res <- withBackendExitCleanly backend $ do
+      putStrLn "entered mineState"
+      withBackendExitCleanly backend $ do
         setOption (ProduceUnsatCores True)
         setOption (ProduceModels True)
-        coeffs <- createCoeffs vars
-        notAllZero coeffs >>= assert
-        revMp <- createLines coeffs cls
-        res <- checkSat
-        case res of
-          Sat -> do
-                   lines <- extractLine coeffs
-                   return $ Right lines
-          Unsat -> do
-                     core <- getUnsatCore
-                     let coreMp = Map.fromList [ (cid,()) | cid <- core ]
-                         coreLines = Set.fromList $ Map.elems $ Map.intersection revMp coreMp
-                     return $ Left coreLines
-      case res of
-        Right lines -> return (Just (Set.empty,[lines]))
-        Left coreLines -> do
-          let noCoreLines = Set.difference cls coreLines
-              Just (coreLine1,coreLines1) = Set.minView coreLines
-              Just (coreLine2,coreLines2) = Set.minView coreLines1
-          res1 <- mineClass vars (Set.insert coreLine1 noCoreLines)
-          case res1 of
-            Just (ncls,lines) -> return (Just (Set.union coreLines1 ncls,lines))
-            Nothing -> do
-              res2 <- mineClass vars (Set.insert coreLine2 noCoreLines)
-              case res2 of
-                Just (ncls,lines) -> return (Just (Set.insert coreLine1 $
-                                                   Set.union coreLines2 ncls,lines))
-                Nothing -> return Nothing
+        let varPairs =
+                map Set.fromList [[var1, var2] |
+                                  var1 <- (Set.toList vars)
+                                 , var2 <- (Set.toList vars)
+                                 , var1 /= var2]
+        individualLinesAndVarsUsed <-
+            mapM
+            (\vars ->
+                 stack $ do
+                   coeffs <- createCoeffs vars
+                   notAllZero coeffs >>= assert
+                   revMp <- createLines coeffs cls
+                   res <- checkSat
+                   case res of
+                     Sat -> do
+                        liftIO $ putStrLn "\n\n***found a Line***\n\n"
+                        line <- extractLine coeffs
+                        return (Set.empty, [line])
+                     Unsat -> return (vars, [])
+            ) varPairs
+        return $ foldr (\(accumset, accumpreds) (newset, newpreds) ->
+                        (Set.union accumset newset, accumpreds ++ newpreds)
+                       ) (Set.empty, []) individualLinesAndVarsUsed
+
+
+                --       core <- getUnsatCore
+                --       let coreMp = Map.fromList [ (cid,()) | cid <- core ]
+                --           coreLines = Set.fromList $ Map.elems $ Map.intersection revMp coreMp
+                --       return $ Left coreLines
+                -- case res of
+                --   Right lines -> return (Just (Set.empty,[lines]))
+                --   Left coreLines -> do
+                --       let noCoreLines = Set.difference cls coreLines
+                --           Just (coreLine1,coreLines1) = Set.minView coreLines
+                --           Just (coreLine2,coreLines2) = Set.minView coreLines1
+                --       res1 <- mineClass vars (Set.insert coreLine1 noCoreLines)
+                --       case res1 of
+                --         Just (ncls,lines) -> return (Just (Set.union coreLines1 ncls,lines))
+                --         Nothing -> do
+                --            res2 <- mineClass vars (Set.insert coreLine2 noCoreLines)
+                --            case res2 of
+                --              Just (ncls,lines) -> return (Just (Set.insert coreLine1 $
+                --                                                 Set.union coreLines2 ncls,lines)
+                --                                          )
+                --              Nothing -> return Nothing

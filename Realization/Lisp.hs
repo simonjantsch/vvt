@@ -19,6 +19,7 @@ import Language.SMTLib2.Internals.Interface as I
 import qualified Language.SMTLib2.Internals.Expression as E
 import qualified Data.Aeson as A
 import qualified Data.ByteString as BS
+import qualified Data.Csv as C
 import Data.Dependent.Map (DMap)
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Sum
@@ -34,6 +35,7 @@ import qualified Data.AttoLisp as L
 import qualified Data.Attoparsec.Number as L
 import System.IO (Handle)
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy.UTF8 as BSL
 import Data.Attoparsec
 import Control.Exception
 import Control.Monad.Trans.Except
@@ -188,6 +190,11 @@ data LispAction = TranslateGate T.Text
                 | CreateInvariant
                 | Parsing L.Lisp
                 deriving Typeable
+
+
+instance (Show a, Show b) => C.ToField (Either a b) where
+    toField (Right r) = BSL.toStrict $ BSL.fromString (show r)
+    toField (Left l) = BSL.toStrict $ BSL.fromString (show l)
 
 readLispFile :: Handle -> IO L.Lisp
 readLispFile h = do
@@ -857,10 +864,15 @@ instance TransitionRelation LispProgram where
       | expr <- programPredicates prog ]
   defaultPredicateExtractor _ = return emptyRSM
   extractPredicates prog rsm (LispConcr full) (LispPart part) = liftIO $ do
-    BSL.writeFile  "./states.json" $ A.encode (unpackCollectedStates $ rsmStates rsm)
+    BSL.writeFile  "./states.json" $ A.encode (unpackCollectedStates $ rsmStates rsm1)
+    let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm1
+        pcStatePairs = concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
+    BSL.writeFile "./states.csv" $
+       C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
     --putStrLn $ "\n **all states so far:" ++ (show (rsmStates rsm)) ++"\n"
     putStrLn $ "partial State in addRSM: " ++ (show part)
     (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) rsm1
+    putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
     return (rsm2,concat $ fmap (\ln -> [mkLine E.Ge ln
                                        ,mkLine E.Gt ln]) lines)
     where
