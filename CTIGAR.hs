@@ -32,7 +32,7 @@ import qualified Data.Set as Set
 import qualified Data.Vector as Vec
 import qualified Data.IntSet as IntSet
 import qualified Data.Yaml as Y
-import GHC.Generics
+--import GHC.Generics
 import Data.IORef
 import Control.Monad (when)
 import Data.Functor.Identity
@@ -57,6 +57,8 @@ import System.Exit
 import Data.Dependent.Map (DMap)
 import qualified Data.Dependent.Map as DMap
 import Control.Monad.Reader (runReader)
+
+import Stats
 
 data AnyBackend m = forall b. (Backend b,SMTMonad b ~ m) => AnyBackend { anyBackend :: m b }
 
@@ -97,62 +99,6 @@ data IC3Env mdl
            }
 
 type Lifting mdl = SMTPool (LiftingState mdl)
-
-data IC3Stats = IC3Stats { startTime :: UTCTime
-                         , consecutionTime :: IORef NominalDiffTime
-                         , consecutionNum :: IORef Int
-                         , domainTime :: IORef NominalDiffTime
-                         , domainNum :: IORef Int
-                         , interpolationTime :: IORef NominalDiffTime
-                         , interpolationNum :: IORef Int
-                         , liftingTime :: IORef NominalDiffTime
-                         , liftingNum :: IORef Int
-                         , initiationTime :: IORef NominalDiffTime
-                         , initiationNum :: IORef Int
-                         , numErased :: Int
-                         , numCTI :: Int
-                         , numUnliftedErased :: Int
-                         , numCTG :: Int
-                         , numMIC :: Int
-                         , numCoreReduced :: Int
-                         , numAbortJoin :: Int
-                         , numAbortMic :: Int
-                         , numRefinements :: Int
-                         , numAddPreds :: Int
-                         }
-
-data IC3MachineReadbleStats =
-    IC3MachineReadableStats
-    { mrs_consecutionTime :: Float
-    , mrs_consecutionNum :: Int
-    , mrs_domainTime :: Float
-    , mrs_domainNum :: Int
-    , mrs_interpolationTime :: Float
-    , mrs_interpolationNum :: Int
-    , mrs_liftingTime :: Float
-    , mrs_liftingNum :: Int
-    , mrs_initiationTime :: Float
-    , mrs_initiationNum :: Int
-    , mrs_numErased :: Int
-    , mrs_numCTI :: Int
-    , mrs_numUnliftedErased :: Int
-    , mrs_numCTG :: Int
-    , mrs_numMIC :: Int
-    , mrs_numCoreReduced :: Int
-    , mrs_numAbortJoin :: Int
-    , mrs_numAbortMic :: Int
-    , mrs_numRefinements :: Int
-    , mrs_numAddPreds :: Int
-    , mrs_numPreds :: Int
-    } deriving (Show, Generic)
-
-instance Y.ToJSON IC3MachineReadbleStats
-
--- data CollectedStates =
---     CollectedStates
---     { Map T.Text [()]
-
---     }
 
 data InterpolationState mdl b
   = InterpolationState { interpCur :: TR.State mdl (Expr b)
@@ -1207,7 +1153,9 @@ elimSpuriousTrans st level = do
                                , numAddPreds = (numAddPreds stats)+(length props) })
   put $ env { ic3PredicateExtractor = nextr }
   interp <- interpolateState level (stateLifted rst) (stateLiftedInputs rst)
-  ic3Debug 3 $ "computed interpolant: " ++ (show interp)
+  ic3Debug 0 $ "mined new predicates: " ++ (show (length props))
+  ic3Debug 0 $ "total added preds:" ++ (show $ fmap numAddPreds (ic3Stats env))
+  ic3Debug 0 $ "computed interpolant: " ++ (show interp)
   domain <- gets ic3Domain
   order <- gets ic3LitOrder
   (ndomain,norder) <- foldlM (\(cdomain,corder) trm
@@ -1671,7 +1619,7 @@ ic3DumpStats fp = do
      level <- k
      curTime <- liftIO $ getCurrentTime
      consTime <- liftIO $ readIORef (consecutionTime stats)
-     consNum <- liftIO $ readIORef (consecutionNum stats) 
+     consNum <- liftIO $ readIORef (consecutionNum stats)
      domTime <- liftIO $ readIORef (domainTime stats)
      domNum <- liftIO $ readIORef (domainNum stats)
      interpTime <- liftIO $ readIORef (interpolationTime stats)
@@ -1685,9 +1633,10 @@ ic3DumpStats fp = do
                           (0,0) (case fp of
                                   Nothing -> []
                                   Just rfp -> rfp)
+         totalRuntime = diffUTCTime curTime (startTime stats)
      liftIO $ do
        putStrLn $ "Level: "++show level
-       putStrLn $ "Total runtime: "++show (diffUTCTime curTime (startTime stats))
+       putStrLn $ "Total runtime: "++show totalRuntime
        putStrLn $ "Consecution time: "++show consTime
        putStrLn $ "Domain time: "++show domTime
        putStrLn $ "Interpolation time: "++show interpTime
@@ -1715,7 +1664,8 @@ ic3DumpStats fp = do
                   (fromIntegral $ numErased stats) :: Int))
 
        let mrsStats =
-               IC3MachineReadableStats { mrs_consecutionTime = realToFrac consTime
+               IC3MachineReadableStats { mrs_totalTime = realToFrac totalRuntime
+                                       , mrs_consecutionTime = realToFrac consTime
                                        , mrs_consecutionNum = consNum
                                        , mrs_domainTime = realToFrac domTime
                                        , mrs_domainNum = domNum
@@ -1736,7 +1686,6 @@ ic3DumpStats fp = do
                                        , mrs_numRefinements = numRefinements stats
                                        , mrs_numAddPreds = numAddPreds stats
                                        , mrs_numPreds = numPreds}
-
        Y.encodeFile "./stats.yaml" mrsStats
    Nothing -> return ()
   dumpDomain <- asks ic3DumpDomainFile
