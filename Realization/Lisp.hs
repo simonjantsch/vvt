@@ -42,6 +42,7 @@ import Control.Monad.Trans.Except
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans
 import Data.Functor.Identity
+import Data.Time.Clock
 
 data LispName (sig :: ([Type],Tree Type)) where
   LispName :: List Repr sz -> Struct Repr tp -> T.Text -> LispName '(sz,tp)
@@ -864,6 +865,7 @@ instance TransitionRelation LispProgram where
       | expr <- programPredicates prog ]
   defaultPredicateExtractor _ = return emptyRSM
   extractPredicates prog rsm (LispConcr full) (LispPart part) = liftIO $ do
+    startTime <- getCurrentTime
     BSL.writeFile  "./states.json" $ A.encode (unpackCollectedStates $ rsmStates rsm1)
     let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm1
         pcStatePairs = concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
@@ -873,8 +875,11 @@ instance TransitionRelation LispProgram where
     putStrLn $ "partial State in addRSM: " ++ (show part)
     (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) rsm1
     putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
-    return (rsm2,concat $ fmap (\ln -> [mkLine E.Ge ln
-                                       ,mkLine E.Gt ln]) lines)
+    endTime <- getCurrentTime
+    let newRsmWithTiming = rsm2 {rsmTiming = (rsmTiming rsm2) + (diffUTCTime endTime startTime)}
+    putStrLn $ "Total Time in RSM so far: " ++ (show $ rsmTiming newRsmWithTiming )
+    return (newRsmWithTiming,concat $ fmap (\ln -> [mkLine E.Ge ln
+                                                   ,mkLine E.Gt ln]) lines)
     where
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =

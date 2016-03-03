@@ -20,6 +20,7 @@ import Data.Traversable (mapM,sequence)
 import Data.GADT.Show
 import Data.GADT.Compare
 import qualified Data.Text as T
+import Data.Time.Clock
 
 import GHC.Generics as G
 
@@ -30,6 +31,7 @@ newtype CollectedStates =
 
 data RSMState loc var = RSMState { rsmLocations :: Map loc (RSMLoc var)
                                  , rsmStates :: CollectedStates
+                                 , rsmTiming :: NominalDiffTime
                                  }
 
 data RSMLoc var = RSMLoc { rsmClasses :: Map (Set var) (Set (Map var Integer))
@@ -40,7 +42,7 @@ data Coeffs b var = Coeffs { coeffsVar :: Map var (Expr b IntType)
                            }
 
 emptyRSM :: RSMState loc var
-emptyRSM = RSMState Map.empty (CollectedStates Map.empty)
+emptyRSM = RSMState Map.empty (CollectedStates Map.empty) 0
 
 addRSMState :: (Ord loc,Ord var) => loc -> Map var Integer -> (Set T.Text, [Either Bool Integer])
                -> RSMState loc var -> RSMState loc var
@@ -176,7 +178,7 @@ mineStates backend st
                                      )(rsmClasses loc)
                           return loc
                       ) (rsmLocations st)
-        return $ RSMState nlocs (rsmStates st)
+        return $ st { rsmLocations = nlocs }
     ) []
   where
     mineClass vars cls
@@ -207,7 +209,7 @@ mineStates backend st
                         return [line]
                      Unsat -> return []
             ) (vars : varPairs)
-        return $ foldr (++) [] individualLines
+        return $ Set.toList . Set.fromList $ foldr (++) [] individualLines
 
 
                 --       core <- getUnsatCore
