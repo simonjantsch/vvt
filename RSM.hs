@@ -166,23 +166,22 @@ mineStates backend st
   = runStateT
     (do
         nlocs <- mapM (\loc -> do
-                          _ <- sequence $
-                                  Map.mapWithKey
-                                  (\vars cls -> do
-                                      res@(ncls, nprops) <- lift $ mineClass vars cls
-                                      props <- get
-                                      liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
-                                      modify (nprops++)
-                                      return ncls
-                                  )(rsmClasses loc)
+                          sequence $
+                              Map.mapWithKey
+                                     (\vars cls -> do
+                                        nprops <- lift $ mineClass vars cls
+                                        props <- get
+                                        liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
+                                        modify (nprops++)
+                                     )(rsmClasses loc)
                           return loc
                       ) (rsmLocations st)
         return $ RSMState nlocs (rsmStates st)
     ) []
   where
     mineClass vars cls
-      | Set.size cls <= 2 = return (vars, [])
-      | Set.size cls > 6 = return (Set.empty,[])
+      | Set.size cls <= 2 = return []
+      | Set.size cls > 6 = return []
     mineClass vars cls = do
       putStrLn "entered mineState"
       withBackendExitCleanly backend $ do
@@ -193,7 +192,7 @@ mineStates backend st
                                   var1 <- (Set.toList vars)
                                  , var2 <- (Set.toList vars)
                                  , var1 /= var2]
-        individualLinesAndVarsUsed <-
+        individualLines <-
             mapM
             (\vars ->
                  stack $ do
@@ -205,12 +204,10 @@ mineStates backend st
                      Sat -> do
                         liftIO $ putStrLn "\n\n***found a Line***\n\n"
                         line <- extractLine coeffs
-                        return (Set.empty, [line])
-                     Unsat -> return (vars, [])
-            ) varPairs
-        return $ foldr (\(accumset, accumpreds) (newset, newpreds) ->
-                        (Set.union accumset newset, accumpreds ++ newpreds)
-                       ) (Set.empty, []) individualLinesAndVarsUsed
+                        return [line]
+                     Unsat -> return []
+            ) (vars : varPairs)
+        return $ foldr (++) [] individualLines
 
 
                 --       core <- getUnsatCore
