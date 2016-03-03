@@ -44,6 +44,22 @@ getAllBenchmarks = do
       benchmarksStripped = catMaybes $ map (stripPrefix parentDir) benchmarks
   return benchmarksStripped
 
+getSVCompPrecompiledBenchmarks :: IO BenchConf
+getSVCompPrecompiledBenchmarks = do
+  benchmarks <- liftIO $ Turtle.fold
+                         (Turtle.ls trDir)
+                         (Fold
+                          (\benchs newFP ->
+                               case extension newFP of
+                                 Just "l" -> (addExtension newFP "c" ) : benchs
+                                 _ -> benchs
+                          )
+                          []
+                          id
+                         )
+  let parentDir = commonPrefix benchmarks
+      benchmarksStripped = catMaybes $ map (stripPrefix parentDir) benchmarks
+  return benchmarksStripped
 
 binDir :: FilePath
 binDir = ".stack-work/install/x86_64-linux/lts-3.19/7.10.3/bin/"
@@ -68,7 +84,7 @@ runBench = do
   benchmarks <-
       case _onlyHardBenchmarks_ of
         True -> return benchmarks_hard
-        False -> getAllBenchmarks
+        False -> getSVCompPrecompiledBenchmarks--getAllBenchmarks
   case _dontCreateTransitionRelations_ of
     True -> return ()
     False ->
