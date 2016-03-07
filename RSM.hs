@@ -190,11 +190,14 @@ mineStates backend st
       withBackendExitCleanly backend $ do
         setOption (ProduceUnsatCores True)
         setOption (ProduceModels True)
-        let varPairs =
-                map Set.fromList [[var1, var2] |
-                                  var1 <- (Set.toList vars)
-                                 , var2 <- (Set.toList vars)
-                                 , var1 /= var2]
+        let
+            genSubsets set
+                | set == Set.empty = [Set.empty]
+                | otherwise =
+                    let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
+                    in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
+            varSubsets = [x | x <- genSubsets vars, (Set.size x > 1)]
+        liftIO $ putStrLn (show varSubsets)
         individualLines <-
             mapM
             (\vars ->
@@ -209,7 +212,7 @@ mineStates backend st
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
-            ) (vars : varPairs)
+            ) varSubsets
         return $ Set.toList . Set.fromList $ foldr (++) [] individualLines
 
 
@@ -233,3 +236,4 @@ mineStates backend st
                 --                                                 Set.union coreLines2 ncls,lines)
                 --                                          )
                 --              Nothing -> return Nothing
+
