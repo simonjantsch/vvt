@@ -32,6 +32,7 @@ newtype CollectedStates =
 data RSMState loc var = RSMState { rsmLocations :: Map loc (RSMLoc var)
                                  , rsmStates :: CollectedStates
                                  , rsmTiming :: NominalDiffTime
+                                 , rsmProducedLines :: Set (Integer,[(var,Integer)])
                                  }
 
 data RSMLoc var = RSMLoc { rsmClasses :: Map (Set var) (Set (Map var Integer))
@@ -42,7 +43,7 @@ data Coeffs b var = Coeffs { coeffsVar :: Map var (Expr b IntType)
                            }
 
 emptyRSM :: RSMState loc var
-emptyRSM = RSMState Map.empty (CollectedStates Map.empty) 0
+emptyRSM = RSMState Map.empty (CollectedStates Map.empty) 0 Set.empty
 
 addRSMState :: (Ord loc,Ord var) => loc -> Map var Integer -> (Set T.Text, [Either Bool Integer])
                -> RSMState loc var -> RSMState loc var

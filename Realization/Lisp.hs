@@ -747,7 +747,7 @@ parseLispValue state inps gates
     castVal sz e f = case isArrayed (getType e) sz $
                           \tp -> f tp (Sized e) of
                      Just res -> res
-               
+
 parseLispValue state inps gates expr f
   = parseLispExpr state inps gates Nothing expr $
     \e -> f (LispValue (Size Nil Nil) (Singleton (Sized e)))
@@ -877,9 +877,15 @@ instance TransitionRelation LispProgram where
     putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
     endTime <- getCurrentTime
     let newRsmWithTiming = rsm2 {rsmTiming = (rsmTiming rsm2) + (diffUTCTime endTime startTime)}
+        alreadyProducedLines =  rsmProducedLines newRsmWithTiming
+        newRsmWithAllProducedLines = newRsmWithTiming
+                                     { rsmProducedLines =
+                                           Set.union (Set.fromList lines) alreadyProducedLines
+                                     }
+        newLines = Set.difference (Set.fromList lines) alreadyProducedLines
     putStrLn $ "Total Time in RSM so far: " ++ (show $ rsmTiming newRsmWithTiming )
-    return (newRsmWithTiming,concat $ fmap (\ln -> [mkLine E.Ge ln
-                                                   ,mkLine E.Gt ln]) lines)
+    return (newRsmWithAllProducedLines,concat $ fmap (\ln -> [mkLine E.Ge ln
+                                                   ,mkLine E.Gt ln]) (Set.toList newLines))
     where
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
