@@ -963,9 +963,13 @@ check st opts verb stats dumpDomain = do
                                  Unpacked (TR.Input mdl))]
                         [Dom.AbstractState (TR.State mdl)])
     checkIt = do
+      stats <- gets ic3Stats
+      time <- liftIO $ getCurrentTime
+      let runTimeSoFar = fmap (diffUTCTime time) (fmap startTime stats)
       ic3DebugAct 1 (do
                         lvl <- k
-                        liftIO $ hPutStrLn stderr $ "Level "++show lvl)
+                        liftIO $
+                            hPutStrLn stderr $ "Level "++show lvl ++ "\ncurrent Time:" ++ (show runTimeSoFar) ++ "\n")
       extend
       sres <- strengthen
       case sres of
