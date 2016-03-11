@@ -87,7 +87,7 @@ Executable vvt-verify
 Executable vvt-predicates
   Hs-Source-Dirs:       bin
   Main-Is:              Predicates.hs
-  Build-Depends:        vvt,base,smtlib2,smtlib2-pipe,smtlib2-debug,containers
+  Build-Depends:        vvt,base,smtlib2,smtlib2-pipe,smtlib2-debug,containers,dependent-map,dependent-sum
 
 Executable vvt-opt
   Hs-Source-Dirs:       bin

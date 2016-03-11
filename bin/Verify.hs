@@ -28,7 +28,7 @@ defaultOptions :: Options
 defaultOptions = Options { optBackends = defaultBackendOptions
                          , optShowHelp = False
                          , optTimeout = Nothing
-                         , optVerbosity = 0
+                         , optVerbosity = 2
                          , optStats = True
                          , optDumpDomain = Nothing
                          , optPrintFixpoint = True

@@ -26,6 +26,7 @@ import Data.Dependent.Sum
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Map (Map)
+import Data.Maybe(catMaybes)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -101,6 +102,53 @@ data LispExpr (t::Type) where
          -> LispExpr BoolType
   ExactlyOne :: [LispExpr BoolType] -> LispExpr BoolType
   AtMostOne :: [LispExpr BoolType] -> LispExpr BoolType
+
+data AnyLispName = forall sz tp. AnyLispName (LispName '(sz,tp)) LispVarCat
+
+instance Eq AnyLispName where
+  AnyLispName n1 cat1 == AnyLispName n2 cat2 = defaultEq n1 n2 && cat1==cat2
+
+instance Show AnyLispName where
+    showsPrec p (AnyLispName n c) = showParen (p>10) $ showString "AnyLispName " . gshowsPrec 11 n . showChar ' ' . showsPrec 11 c
+
+buildVarDependencyGraph :: LispProgram -> IO ()
+buildVarDependencyGraph prog =
+    mapM_ (\(k :=> v) ->
+               let depList = collectVariableDependencies v
+               in putStrLn ("\n\n" ++ show k ++ show depList)
+          ) (DMap.toList $ programNext prog)
+    where
+      collectVariableDependencies :: LispVar LispExpr sz -> [AnyLispName]
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) =
+          [AnyLispName ln Input]
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) =
+          [AnyLispName ln State]
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) =
+          let Just gate = DMap.lookup ln (programGates prog)
+          in collectVariableDependencies (gateDefinition gate)
+      -- collectVariableDependencies ls@(LispStore var _ _ _) =
+      --     collectVariableDependencies var
+      collectVariableDependencies lc@(LispConstr (LispValue (Size reps exprList) exprs)) =
+          -- (concatMap collectFromExpression $ concat
+          --                $ List.toList (\e -> [e]) exprList) ++
+          runIdentity $ (Struct.flatten (\(Sized e) -> return $ collectFromExpression e) (return . concat) exprs)
+      collectVariableDependencies lIte@(LispITE cond th els) =
+          collectFromExpression cond
+          ++ collectVariableDependencies th
+          ++ collectVariableDependencies els
+
+      collectFromExpression :: LispExpr t -> [AnyLispName]
+      collectFromExpression (LispExpr _) = [] --über stateMonad die Variablen collecten
+      collectFromExpression (LispRef var _) =
+          []--per index auf element zugreifen
+      collectFromExpression (LispSize var _) =
+          collectVariableDependencies var -- hängt nur von Size ab
+      collectFromExpression (LispEq var1 var2) =
+          collectVariableDependencies var1 ++ collectVariableDependencies var2
+      collectFromExpression (ExactlyOne exprs) = concatMap collectFromExpression exprs
+      collectFromExpression (AtMostOne exprs) = concatMap collectFromExpression exprs
+      collectFromExpression _ = []
+
 
 data LispSort = forall (sz :: [Type]) (tp::Tree Type).
                 LispSort (List Repr sz) (Struct Repr tp)
@@ -813,7 +861,7 @@ instance GetType LispRev where
     = List.index (sizeListType sz) i
 
 instance TransitionRelation LispProgram where
-  type State LispProgram = LispState 
+  type State LispProgram = LispState
   type Input LispProgram = LispState
   type RealizationProgress LispProgram = LispState
   type PredicateExtractor LispProgram = RSMState (Set T.Text) (LispRev IntType)
@@ -883,13 +931,14 @@ instance TransitionRelation LispProgram where
     where
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
-          map extrVal (DMap.toList full)
+          catMaybes $ map extrVal (DMap.toList full)
           where
-            extrVal :: DSum LispName LispUVal -> Either Bool Integer
+            extrVal :: DSum LispName LispUVal -> Maybe (Either Bool Integer)
             extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
-                Left bool
+                Just $ Left bool
             extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
-                Right int
+                Just $ Right int
+            extrVal _ = Nothing
 
       rsm1 = addRSMState activePc ints (activePc, getStateFromDmap full) rsm
       pcs = DMap.filterWithKey (\name val -> case DMap.lookup name (programState prog) of
