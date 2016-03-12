@@ -128,7 +128,7 @@ buildVarDependencyGraph prog =
           in collectVariableDependencies (gateDefinition gate)
       -- collectVariableDependencies ls@(LispStore var _ _ _) =
       --     collectVariableDependencies var
-      collectVariableDependencies lc@(LispConstr (LispValue (Size reps exprList) exprs)) =
+      collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) =
           -- (concatMap collectFromExpression $ concat
           --                $ List.toList (\e -> [e]) exprList) ++
           runIdentity $ (Struct.flatten (\(Sized e) -> return $ collectFromExpression e) (return . concat) exprs)
@@ -138,7 +138,22 @@ buildVarDependencyGraph prog =
           ++ collectVariableDependencies els
 
       collectFromExpression :: LispExpr t -> [AnyLispName]
-      collectFromExpression (LispExpr _) = [] --über stateMonad die Variablen collecten
+      collectFromExpression (LispExpr expr) =
+          execState (collectRefsInSubExpr expr) []
+          where
+            collectRefsInSubExpr =
+                E.mapExpr
+                return
+                return
+                return
+                return
+                return
+                return
+                return
+                (\expr -> do modify $ (++) (collectFromExpression expr)
+                             return expr
+                )
+
       collectFromExpression (LispRef var _) =
           []--per index auf element zugreifen
       collectFromExpression (LispSize var _) =
@@ -729,7 +744,7 @@ parseLispExpr state inps gates srt expr f
     parser = LispParser { parseFunction = \_ _ _ _ _ _ -> throwE $ "Invalid function"
                         , parseDatatype = \_ _ -> throwE $ "Invalid datatype"
                         , parseVar = \_ _ _ _ _ _ -> throwE $ "Invalid variable"
-                        , parseRecursive = parseLispExpr state inps gates
+                        , parseRecursive = \_ -> parseLispExpr state inps gates
                         , registerQVar = \_ _ -> (NoRef,parser)
                         , registerLetVar = \_ _ -> (NoRef,parser) }
 

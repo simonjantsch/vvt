@@ -617,7 +617,7 @@ abstractConsecution fi abs_st succ = do
   --modify (\env -> env { ic3ConsecutionCount = (ic3ConsecutionCount env)+1 })
   ic3DebugAct 3 $ do
     abs_st_str <- renderAbstractState abs_st
-    liftIO $ putStrLn ("Original abstract state: "++abs_st_str)
+    liftIO $ hPutStrLn stderr ("Original abstract state: "++abs_st_str)
   env <- get
   res <- liftIO $ consecutionPerform (ic3Domain env) (ic3Consecution env) fi $ \vars -> do
     trm <- Dom.toDomainTerm abs_st (ic3Domain env) (consecutionState vars)
@@ -657,7 +657,7 @@ abstractConsecution fi abs_st succ = do
                      else Vec.cons (ic3InitialProperty env,False) absCore
       ic3DebugAct 3 $ do
         abs_st_str <- renderAbstractState absCore'
-        liftIO $ putStrLn ("Reduced abstract state: "++abs_st_str)
+        liftIO $ hPutStrLn stderr ("Reduced abstract state: "++abs_st_str)
       --absInit' <- initiationAbstract absCore'
       --error $ "abstractConsecution core: "++show absCore'++" "++show absInit'
       return $ Left absCore'
@@ -811,11 +811,11 @@ abstractGeneralize :: TR.TransitionRelation mdl
 abstractGeneralize level cube = do
   ic3DebugAct 3 $ do
     cubeStr <- renderAbstractState cube
-    liftIO $ putStrLn $ "mic: "++cubeStr
+    liftIO $ hPutStrLn stderr $ "mic: "++cubeStr
   ncube <- mic level cube
   ic3DebugAct 3 $ do
     ncubeStr <- renderAbstractState ncube
-    liftIO $ putStrLn $ "mic done: "++ncubeStr
+    liftIO $ hPutStrLn stderr $ "mic done: "++ncubeStr
   pushForward (level+1) ncube
   where
     pushForward level cube = do
@@ -830,7 +830,7 @@ abstractGeneralize level cube = do
     addCube level cube = do
       ic3DebugAct 3 $ do
         cubeStr <- renderAbstractState cube
-        liftIO $ putStrLn $ "Adding cube at level "++show level++": "++cubeStr
+        liftIO $ hPutStrLn stderr $ "Adding cube at level "++show level++": "++cubeStr
       addAbstractCube level cube
       return level
 
@@ -1148,14 +1148,13 @@ elimSpuriousTrans st level = do
   mdl <- asks ic3Model
   rst <- liftIO $ readIORef st
   backend <- asks ic3BaseBackend
-  env <- get
-  (nextr,props) <- TR.extractPredicates mdl
-                   (ic3PredicateExtractor env)
+  extr <- gets ic3PredicateExtractor
+  (nextr,props) <- TR.extractPredicates mdl extr
                    (stateFull rst)
                    (stateLifted rst)
+  modify $ \env -> env { ic3PredicateExtractor = nextr }
   updateStats (\stats -> stats { numRefinements = (numRefinements stats)+1
                                , numAddPreds = (numAddPreds stats)+(length props) })
-  put $ env { ic3PredicateExtractor = nextr }
   interp <- interpolateState level (stateLifted rst) (stateLiftedInputs rst)
   ic3Debug 0 $ "mined new predicates: " ++ (show (length props))
   ic3Debug 0 $ "total added preds:" ++ (show $ fmap numAddPreds (ic3Stats env))
