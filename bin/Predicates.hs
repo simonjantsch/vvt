@@ -82,7 +82,7 @@ main = do
      exitWith (ExitFailure (-1))
    Right opts -> do
      prog <- fmap parseProgram (readLispFile stdin)
-     --buildVarDependencyGraph prog
+     buildVarDependencyGraph prog
      let lins = statesOfType IntRepr prog
          ineqs = runIdentity $ ineqPredicates lins
          prog1 = if addIneqPredicates opts

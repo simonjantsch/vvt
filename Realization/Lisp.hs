@@ -105,6 +105,9 @@ data LispExpr (t::Type) where
 
 data AnyLispName = forall sz tp. AnyLispName (LispName '(sz,tp)) LispVarCat
 
+instance Ord AnyLispName where
+    compare (AnyLispName n1 cat1) (AnyLispName n2 cat2) = defaultCompare n1 n2
+
 instance Eq AnyLispName where
   AnyLispName n1 cat1 == AnyLispName n2 cat2 = defaultEq n1 n2 && cat1==cat2
 
@@ -115,14 +118,14 @@ buildVarDependencyGraph :: LispProgram -> IO ()
 buildVarDependencyGraph prog =
     mapM_ (\(k :=> v) ->
                let depList = collectVariableDependencies v
-               in putStrLn ("\n\n" ++ show k ++ show depList)
+               in putStrLn ("\n\n" ++ show k ++ " " ++ show depList)
           ) (DMap.toList $ programNext prog)
     where
-      collectVariableDependencies :: LispVar LispExpr sz -> [AnyLispName]
+      collectVariableDependencies :: LispVar LispExpr sz -> Set AnyLispName
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) =
-          [AnyLispName ln Input]
+          Set.singleton (AnyLispName ln Input)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) =
-          [AnyLispName ln State]
+          Set.singleton (AnyLispName ln State)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) =
           let Just gate = DMap.lookup ln (programGates prog)
           in collectVariableDependencies (gateDefinition gate)
@@ -131,15 +134,17 @@ buildVarDependencyGraph prog =
       collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) =
           -- (concatMap collectFromExpression $ concat
           --                $ List.toList (\e -> [e]) exprList) ++
-          runIdentity $ (Struct.flatten (\(Sized e) -> return $ collectFromExpression e) (return . concat) exprs)
+          runIdentity $
+              Struct.flatten (\(Sized e) -> return $ collectFromExpression e) (return . Set.unions) exprs
       collectVariableDependencies lIte@(LispITE cond th els) =
-          collectFromExpression cond
-          ++ collectVariableDependencies th
-          ++ collectVariableDependencies els
+          Set.unions [ collectFromExpression cond
+                     , collectVariableDependencies th
+                     , collectVariableDependencies els
+                     ]
 
-      collectFromExpression :: LispExpr t -> [AnyLispName]
+      collectFromExpression :: LispExpr t -> Set AnyLispName
       collectFromExpression (LispExpr expr) =
-          execState (collectRefsInSubExpr expr) []
+          execState (collectRefsInSubExpr expr) Set.empty
           where
             collectRefsInSubExpr =
                 E.mapExpr
@@ -150,19 +155,19 @@ buildVarDependencyGraph prog =
                 return
                 return
                 return
-                (\expr -> do modify $ (++) (collectFromExpression expr)
+                (\expr -> do modify $ Set.union (collectFromExpression expr)
                              return expr
                 )
 
       collectFromExpression (LispRef var _) =
-          []--per index auf element zugreifen
+          collectVariableDependencies var -- eigentlich sollte nur auf ein bestimmtes Element zugegriffen werden
       collectFromExpression (LispSize var _) =
           collectVariableDependencies var -- hängt nur von Size ab
       collectFromExpression (LispEq var1 var2) =
-          collectVariableDependencies var1 ++ collectVariableDependencies var2
-      collectFromExpression (ExactlyOne exprs) = concatMap collectFromExpression exprs
-      collectFromExpression (AtMostOne exprs) = concatMap collectFromExpression exprs
-      collectFromExpression _ = []
+          Set.union (collectVariableDependencies var1) (collectVariableDependencies var2)
+      collectFromExpression (ExactlyOne exprs) = Set.unions $ map collectFromExpression exprs
+      collectFromExpression (AtMostOne exprs) = Set.unions $ map collectFromExpression exprs
+      --collectFromExpression _ = Set.empty
 
 
 data LispSort = forall (sz :: [Type]) (tp::Tree Type).
@@ -744,7 +749,7 @@ parseLispExpr state inps gates srt expr f
     parser = LispParser { parseFunction = \_ _ _ _ _ _ -> throwE $ "Invalid function"
                         , parseDatatype = \_ _ -> throwE $ "Invalid datatype"
                         , parseVar = \_ _ _ _ _ _ -> throwE $ "Invalid variable"
-                        , parseRecursive = \_ -> parseLispExpr state inps gates
+                        , parseRecursive = parseLispExpr state inps gates
                         , registerQVar = \_ _ -> (NoRef,parser)
                         , registerLetVar = \_ _ -> (NoRef,parser) }
 
