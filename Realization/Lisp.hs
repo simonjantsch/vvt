@@ -114,61 +114,92 @@ instance Eq AnyLispName where
 instance Show AnyLispName where
     showsPrec p (AnyLispName n c) = showParen (p>10) $ showString "AnyLispName " . gshowsPrec 11 n . showChar ' ' . showsPrec 11 c
 
+data AnyGate = forall sz tp. AnyGate (LispGate '(sz, tp))
+
+instance Ord AnyGate where
+    compare (AnyGate g1) (AnyGate g2) =
+        compare (getAnnotation $ gateAnnotation g1) (getAnnotation $ gateAnnotation g2)
+
+instance Eq AnyGate where
+    AnyGate g1 == AnyGate g2 =
+        (getAnnotation $ gateAnnotation g1) == (getAnnotation $ gateAnnotation g2)
+
 buildVarDependencyGraph :: LispProgram -> IO ()
 buildVarDependencyGraph prog =
-    mapM_ (\(k :=> v) ->
-               let depList = collectVariableDependencies v
-               in putStrLn ("\n\n" ++ show k ++ " " ++ show depList)
-          ) (DMap.toList $ programNext prog)
+    evalStateT
+        (mapM_ (\(k :=> v) ->
+                   do depList <- collectVariableDependencies v
+                      liftIO $ putStrLn ("\n\n" ++ show k ++ " " ++ show depList)
+                      modify $ \(gateMap, _) -> (gateMap, Set.empty)
+              ) (DMap.toList $ programNext prog)
+        ) (Map.empty, Set.empty)
     where
-      collectVariableDependencies :: LispVar LispExpr sz -> Set AnyLispName
+      collectVariableDependencies ::
+          LispVar LispExpr sz
+          -> StateT (Map AnyGate (Set AnyLispName), Set AnyLispName) IO (Set AnyLispName)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) =
-          Set.singleton (AnyLispName ln Input)
+          return $ Set.singleton (AnyLispName ln Input)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) =
-          Set.singleton (AnyLispName ln State)
+          return $ Set.singleton (AnyLispName ln State)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) =
           let Just gate = DMap.lookup ln (programGates prog)
-          in collectVariableDependencies (gateDefinition gate)
-      -- collectVariableDependencies ls@(LispStore var _ _ _) =
-      --     collectVariableDependencies var
+          in do state <- get
+                let gateMap = fst state
+                case Map.lookup (AnyGate gate) gateMap of
+                  Nothing ->
+                      do gateDeps <- collectVariableDependencies (gateDefinition gate)
+                         modify $ \(gateMap, b) -> (Map.insert (AnyGate gate) gateDeps gateMap, b)
+                         return gateDeps
+                  Just dependencies -> return dependencies
+
       collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) =
           -- (concatMap collectFromExpression $ concat
           --                $ List.toList (\e -> [e]) exprList) ++
-          runIdentity $
-              Struct.flatten (\(Sized e) -> return $ collectFromExpression e) (return . Set.unions) exprs
+          Struct.flatten (\(Sized e) -> collectFromExpression e) (return . Set.unions) exprs
       collectVariableDependencies lIte@(LispITE cond th els) =
-          Set.unions [ collectFromExpression cond
-                     , collectVariableDependencies th
-                     , collectVariableDependencies els
-                     ]
+          do condDeps <- collectFromExpression cond
+             thenDeps <- collectVariableDependencies th
+             elseDeps <- collectVariableDependencies els
+             return $ Set.unions [ condDeps
+                                 , thenDeps
+                                 , elseDeps
+                                 ]
 
-      collectFromExpression :: LispExpr t -> Set AnyLispName
+      collectFromExpression ::
+          LispExpr t
+          -> StateT (Map AnyGate (Set AnyLispName), Set AnyLispName) IO (Set AnyLispName)
       collectFromExpression (LispExpr expr) =
-          execState (collectRefsInSubExpr expr) Set.empty
-          where
-            collectRefsInSubExpr =
-                E.mapExpr
-                return
-                return
-                return
-                return
-                return
-                return
-                return
-                (\expr -> do modify $ Set.union (collectFromExpression expr)
-                             return expr
-                )
+          do _ <- E.mapExpr
+                  return
+                  return
+                  return
+                  return
+                  return
+                  return
+                  return
+                  (\expr -> do subDeps <- collectFromExpression expr
+                               modify $ \(a, b) -> (a, Set.union subDeps b)
+                               return expr
+                  ) expr
+             state <- get
+             let currentExprDependencies = snd state
+             modify $ \(gateMap, _) -> (gateMap, Set.empty)
+             return currentExprDependencies
 
       collectFromExpression (LispRef var _) =
           collectVariableDependencies var -- eigentlich sollte nur auf ein bestimmtes Element zugegriffen werden
       collectFromExpression (LispSize var _) =
-          collectVariableDependencies var -- hängt nur von Size ab
+          collectVariableDependencies var -- hängt eigentlich nur von dem Size Parameter in var ab
       collectFromExpression (LispEq var1 var2) =
-          Set.union (collectVariableDependencies var1) (collectVariableDependencies var2)
-      collectFromExpression (ExactlyOne exprs) = Set.unions $ map collectFromExpression exprs
-      collectFromExpression (AtMostOne exprs) = Set.unions $ map collectFromExpression exprs
-      --collectFromExpression _ = Set.empty
-
+          do lhsDeps <- collectVariableDependencies var1
+             rhsDeps <- collectVariableDependencies var2
+             return $ Set.union lhsDeps rhsDeps
+      collectFromExpression (ExactlyOne exprs) =
+          do subDeps <- mapM collectFromExpression exprs
+             return $ Set.unions subDeps
+      collectFromExpression (AtMostOne exprs) =
+          do subDeps <- mapM collectFromExpression exprs
+             return $ Set.unions subDeps
 
 data LispSort = forall (sz :: [Type]) (tp::Tree Type).
                 LispSort (List Repr sz) (Struct Repr tp)
