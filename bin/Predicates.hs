@@ -82,12 +82,12 @@ main = do
      exitWith (ExitFailure (-1))
    Right opts -> do
      prog <- fmap parseProgram (readLispFile stdin)
-     buildVarDependencyGraph prog
+     depMap <- buildVarDependencyGraph prog
      let lins = statesOfType IntRepr prog
          ineqs = runIdentity $ ineqPredicates lins
-         prog1 = if addIneqPredicates opts
+         prog1 = (if addIneqPredicates opts
                  then prog { programPredicates = ineqs++programPredicates prog }
-                 else prog
+                 else prog) { programVarDepMap = depMap }
          prog2 = if addBoolPredicates opts
                  then prog1 { programPredicates = statesOfType BoolRepr prog++
                                                   programPredicates prog1
@@ -99,5 +99,6 @@ main = do
                                 (karrPredicates prog)
                        return (prog2 { programPredicates = preds++programPredicates prog2 }))
               else return prog2
+     hPutStrLn stderr $ show depMap
      print $ programToLisp prog3
 

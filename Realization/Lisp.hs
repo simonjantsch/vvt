@@ -41,6 +41,7 @@ import Data.Attoparsec
 import Control.Exception
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State.Strict
+import Control.Monad.Trans.State.Strict as SM
 import Control.Monad.Trans
 import Data.Functor.Identity
 import Data.Time.Clock
@@ -63,6 +64,7 @@ data LispProgram
                 , programInvariant :: [LispExpr BoolType]
                 , programAssumption :: [LispExpr BoolType]
                 , programPredicates :: [LispExpr BoolType]
+                , programVarDepMap :: Map AnyLispName (Set AnyLispName)
                 } deriving Show
 
 data LispGate (sig :: ([Type],Tree Type)) = LispGate { gateDefinition :: LispVar LispExpr sig
@@ -103,7 +105,7 @@ data LispExpr (t::Type) where
   ExactlyOne :: [LispExpr BoolType] -> LispExpr BoolType
   AtMostOne :: [LispExpr BoolType] -> LispExpr BoolType
 
-data AnyLispName = forall sz tp. AnyLispName (LispName '(sz,tp)) LispVarCat
+data AnyLispName = forall a. AnyLispName (LispName a) LispVarCat
 
 instance Ord AnyLispName where
     compare (AnyLispName n1 cat1) (AnyLispName n2 cat2) = defaultCompare n1 n2
@@ -114,43 +116,57 @@ instance Eq AnyLispName where
 instance Show AnyLispName where
     showsPrec p (AnyLispName n c) = showParen (p>10) $ showString "AnyLispName " . gshowsPrec 11 n . showChar ' ' . showsPrec 11 c
 
-data AnyGate = forall sz tp. AnyGate (LispGate '(sz, tp))
-
-instance Ord AnyGate where
-    compare (AnyGate g1) (AnyGate g2) =
-        compare (getAnnotation $ gateAnnotation g1) (getAnnotation $ gateAnnotation g2)
+data AnyGate = forall a. AnyGate (LispName a)
 
 instance Eq AnyGate where
-    AnyGate g1 == AnyGate g2 =
-        (getAnnotation $ gateAnnotation g1) == (getAnnotation $ gateAnnotation g2)
+    AnyGate g1 == AnyGate g2 = defaultEq g1 g2
 
-buildVarDependencyGraph :: LispProgram -> IO ()
+instance Ord AnyGate where
+    compare (AnyGate g1) (AnyGate g2) = defaultCompare g1 g2
+
+buildVarDependencyGraph :: LispProgram -> IO (Map AnyLispName (Set AnyLispName))
 buildVarDependencyGraph prog =
-    evalStateT
+    fmap (\(_,_,c) -> c) $
+    execStateT
         (mapM_ (\(k :=> v) ->
                    do depList <- collectVariableDependencies v
-                      liftIO $ putStrLn ("\n\n" ++ show k ++ " " ++ show depList)
-                      modify $ \(gateMap, _) -> (gateMap, Set.empty)
+                      modify $ \(gateMap, _, depMap) ->
+                                   ( gateMap
+                                   , Set.empty
+                                   , Map.insert (AnyLispName k State) depList depMap)
               ) (DMap.toList $ programNext prog)
-        ) (Map.empty, Set.empty)
+        ) (Map.empty, Set.empty, Map.empty)
     where
       collectVariableDependencies ::
           LispVar LispExpr sz
-          -> StateT (Map AnyGate (Set AnyLispName), Set AnyLispName) IO (Set AnyLispName)
+          -> StateT
+             (Map AnyGate (Set AnyLispName)
+             , Set AnyLispName
+             , Map AnyLispName (Set AnyLispName)
+             )
+             IO
+             (Set AnyLispName)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) =
           return $ Set.singleton (AnyLispName ln Input)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) =
           return $ Set.singleton (AnyLispName ln State)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) =
-          let Just gate = DMap.lookup ln (programGates prog)
+          let g = DMap.lookup ln (programGates prog)
           in do state <- get
-                let gateMap = fst state
-                case Map.lookup (AnyGate gate) gateMap of
+                let gateMap = (\(a,_,_) -> a) state
+                case g of
+                  Just gate ->
+                      case Map.lookup (AnyGate ln) gateMap of
+                        Nothing ->
+                            do gateDeps <- collectVariableDependencies (gateDefinition gate)
+                               --liftIO $ putStrLn $ "gate found: " ++ (show gate) ++ "deps: " ++ (show gateDeps)
+                               modify $ \(gateMap, b, c) -> (Map.insert (AnyGate ln) gateDeps gateMap, b, c)
+                               return gateDeps
+                        Just dependencies -> return dependencies
                   Nothing ->
-                      do gateDeps <- collectVariableDependencies (gateDefinition gate)
-                         modify $ \(gateMap, b) -> (Map.insert (AnyGate gate) gateDeps gateMap, b)
-                         return gateDeps
-                  Just dependencies -> return dependencies
+                      do liftIO . putStrLn $ "no gate found!"
+                         return Set.empty
+
 
       collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) =
           -- (concatMap collectFromExpression $ concat
@@ -167,7 +183,13 @@ buildVarDependencyGraph prog =
 
       collectFromExpression ::
           LispExpr t
-          -> StateT (Map AnyGate (Set AnyLispName), Set AnyLispName) IO (Set AnyLispName)
+          -> StateT
+             (Map AnyGate (Set AnyLispName)
+             , Set AnyLispName
+             , Map AnyLispName (Set AnyLispName)
+             )
+             IO
+             (Set AnyLispName)
       collectFromExpression (LispExpr expr) =
           do _ <- E.mapExpr
                   return
@@ -178,12 +200,12 @@ buildVarDependencyGraph prog =
                   return
                   return
                   (\expr -> do subDeps <- collectFromExpression expr
-                               modify $ \(a, b) -> (a, Set.union subDeps b)
+                               modify $ \(a, b, c) -> (a, Set.union subDeps b, c)
                                return expr
                   ) expr
              state <- get
-             let currentExprDependencies = snd state
-             modify $ \(gateMap, _) -> (gateMap, Set.empty)
+             let currentExprDependencies = (\(_,b,_) -> b) state
+             modify $ \(gateMap, _, c) -> (gateMap, Set.empty, c)
              return currentExprDependencies
 
       collectFromExpression (LispRef var _) =
@@ -310,7 +332,7 @@ programToLisp :: LispProgram -> L.Lisp
 programToLisp prog = L.List (L.Symbol "program":elems)
   where
     elems = ann ++ states ++ inputs ++ gates ++ next ++ init ++
-            prop ++ invar ++ assump ++ preds
+            prop ++ invar ++ assump ++ preds ++ varDepMap
     ann = annToLisp (programAnnotation prog)
     states = if DMap.null (programState prog)
              then []
@@ -367,6 +389,17 @@ programToLisp prog = L.List (L.Symbol "program":elems)
             then []
             else [L.List (L.Symbol "predicates":preds')]
     preds' = [ lispExprToLisp p | p <- programPredicates prog ]
+    varDepMap = if null (programVarDepMap prog)
+                then []
+                else [L.List (L.Symbol "variableDependencies":varDepMap')]
+    varDepMap' = [ let varDeps =
+                           map (\ln@(AnyLispName (LispName _ _ name) _)
+                                    -> L.Symbol name
+                               ) (Set.toList depSet)
+                   in  L.List (L.Symbol name:[L.List varDeps])
+                 | (AnyLispName (LispName _ _ name) _, depSet) <-
+                     Map.toList (programVarDepMap prog)
+                 ]
 
 lispExprToLisp :: LispExpr t -> L.Lisp
 lispExprToLisp (LispExpr e)
@@ -521,7 +554,8 @@ parseProgram descr = case descr of
                       , programInit = init
                       , programInvariant = invar
                       , programAssumption = assume
-                      , programPredicates = preds }
+                      , programPredicates = preds
+                      , programVarDepMap = Map.empty}
 
 parseAnnotation :: [L.Lisp] -> Map T.Text L.Lisp -> (Map T.Text L.Lisp,[L.Lisp])
 parseAnnotation [] cur = (cur,[])
@@ -780,7 +814,7 @@ parseLispExpr state inps gates srt expr f
     parser = LispParser { parseFunction = \_ _ _ _ _ _ -> throwE $ "Invalid function"
                         , parseDatatype = \_ _ -> throwE $ "Invalid datatype"
                         , parseVar = \_ _ _ _ _ _ -> throwE $ "Invalid variable"
-                        , parseRecursive = parseLispExpr state inps gates
+                        , parseRecursive = \_ -> parseLispExpr state inps gates
                         , registerQVar = \_ _ -> (NoRef,parser)
                         , registerLetVar = \_ _ -> (NoRef,parser) }
 
