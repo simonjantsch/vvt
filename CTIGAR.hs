@@ -192,7 +192,7 @@ k = do
   return $ frontier cons
 
 ic3Debug :: Int -> String -> IC3 mdl ()
-ic3Debug lvl txt = ic3DebugAct lvl (liftIO $ hPutStrLn stdout txt)
+ic3Debug lvl txt = ic3DebugAct lvl (liftIO $ hPutStrLn stderr txt)
 
 ic3DebugAct :: Int -> IC3 mdl () -> IC3 mdl ()
 ic3DebugAct lvl act = do
@@ -811,7 +811,7 @@ abstractGeneralize :: TR.TransitionRelation mdl
 abstractGeneralize level cube = do
   ic3DebugAct 3 $ do
     cubeStr <- renderAbstractState cube
-    liftIO $ hPutStrLn stderr $ "mic: "++cubeStr
+    liftIO $ hPutStrLn stderr $ "mic: "++cubeStr ++ " level: " ++ (show level)
   ncube <- mic level cube
   ic3DebugAct 3 $ do
     ncubeStr <- renderAbstractState ncube
@@ -1156,7 +1156,7 @@ elimSpuriousTrans st level = do
   updateStats (\stats -> stats { numRefinements = (numRefinements stats)+1
                                , numAddPreds = (numAddPreds stats)+(length props) })
   interp <- interpolateState level (stateLifted rst) (stateLiftedInputs rst)
-  ic3Debug 0 $ "mined new predicates: " ++ (show (length props))
+  ic3Debug 0 $ "mined new predicates: " ++ (show props)
   ic3Debug 0 $ "computed interpolant: " ++ (show interp)
   domain <- gets ic3Domain
   order <- gets ic3LitOrder
@@ -1169,6 +1169,7 @@ elimSpuriousTrans st level = do
                                 return (ndom,nord)
                              ) (domain,order) (interp++props)
   --liftIO $ domainDump ndomain >>= putStrLn
+  ic3Debug 5 $ "newOrder: " ++ (show norder)
   modify $ \env -> env { ic3Domain = ndomain
                        , ic3LitOrder = norder }
 
@@ -1320,9 +1321,11 @@ mic' :: TR.TransitionRelation mdl
 mic' level ast recDepth = do
   order <- gets ic3LitOrder
   attempts <- asks ic3MicAttempts
+  ic3Debug 4 $ "micAttempts: " ++ (show attempts)
   let sortedAst = Vec.fromList $ sortBy (\(k1,_) (k2,_)
                                          -> compareOrder order k1 k2) $
                   Vec.toList ast
+  ic3Debug 4 $ "sorted Ast: " ++ (show sortedAst)
   mic'' sortedAst 0 attempts
   where
     mic'' ast _ 0 = do

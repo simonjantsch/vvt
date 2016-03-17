@@ -97,7 +97,7 @@ createLine coeffs vars = do
            embed $ PlusLst rxs
   let rhs = coeffsConst coeffs
       line = lhs :==: rhs
-  liftIO $ putStrLn (show line)
+  --liftIO $ putStrLn (show line)
   embed $ line
 
 createLines :: (Backend b,Ord var, MonadIO (SMTMonad b)) => Coeffs b var -> Set (Map var Integer)
@@ -174,7 +174,7 @@ mineStates backend st
                                      (\vars cls -> do
                                         nprops <- lift $ mineClass vars cls
                                         props <- get
-                                        liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
+                                        --liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
                                         modify (nprops++)
                                      )(rsmClasses loc)
                           return loc
@@ -186,7 +186,7 @@ mineStates backend st
       | Set.size cls <= 2 = return []
       | Set.size cls > 6 = return []
     mineClass vars cls = do
-      putStrLn "entered mineState"
+      --putStrLn "entered mineState"
       withBackendExitCleanly backend $ do
         setOption (ProduceUnsatCores True)
         setOption (ProduceModels True)
@@ -205,7 +205,7 @@ mineStates backend st
                    res <- checkSat
                    case res of
                      Sat -> do
-                        liftIO $ putStrLn "\n\n***found a Line***\n\n"
+                        --liftIO $ putStrLn "\n\n***found a Line***\n\n"
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
