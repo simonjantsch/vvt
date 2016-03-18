@@ -12,19 +12,38 @@ import Data.Foldable
 import Prelude hiding (foldl)
 import Data.GADT.Compare
 import Data.Functor.Identity
+import Data.Maybe (maybeToList)
+import qualified Data.Map as Map
+import qualified Data.Set as Set
 
-ineqPredicates :: (Embed m e,GetType e) => [e IntType] -> m [e BoolType]
-ineqPredicates [] = return []
-ineqPredicates (i:is) = do
+ineqPredicates :: (Embed m e,GetType e) => e IntType -> [e IntType] -> m [e BoolType]
+ineqPredicates _ [] = return []
+ineqPredicates i is = do
   lts <- mapM (\j -> i .<. j) is
   les <- mapM (\j -> i .<=. j) is
-  rest <- ineqPredicates is
-  return (lts++les++rest)
+  --rest <- ineqPredicates is
+  return (lts++les) -- ++rest)
 
-statesOfType :: Repr t -> LispProgram -> [LispExpr t]
-statesOfType repr prog = DMap.foldlWithKey (\lin name _
-                                            -> getStates repr name ++ lin
-                                           ) [] (programState prog)
+-- statesOfType :: Repr t -> LispProgram -> [LispExpr t]
+-- statesOfType repr prog = DMap.foldlWithKey (\lin name _
+--                                             -> getStates repr name ++ lin
+--                                            ) [] (programState prog)
+--   where
+--     getStates :: Repr t -> LispName sig -> [LispExpr t]
+--     getStates repr name@(LispName lvl tps _) = case lvl of
+--       Nil -> runIdentity $ Struct.flattenIndex
+--              (\idx repr' -> case geq repr repr' of
+--                Just Refl -> return [LispRef (NamedVar name State) idx]
+--                Nothing -> return [])
+--              (return . concat) tps
+--       _ -> []
+
+statesOfTypeWithDependencies :: Repr t -> LispProgram -> [(LispExpr t, [LispExpr t])]
+statesOfTypeWithDependencies repr prog =
+    DMap.foldlWithKey (\sofar name _
+                           -> let statesOfType = getStates repr name -- ++ lin
+                              in (map (collectDeps repr) statesOfType) ++ sofar
+                      ) [] (programState prog)
   where
     getStates :: Repr t -> LispName sig -> [LispExpr t]
     getStates repr name@(LispName lvl tps _) = case lvl of
@@ -34,7 +53,17 @@ statesOfType repr prog = DMap.foldlWithKey (\lin name _
                Nothing -> return [])
              (return . concat) tps
       _ -> []
-
+    collectDeps :: Repr t -> LispExpr t -> (LispExpr t, [LispExpr t])
+    collectDeps repr var@(LispRef (NamedVar name State) idx) =
+        ( var
+        , concat . maybeToList $
+                 fmap (concatMap (\(AnyLispName dependency _) ->
+                                      getStates repr dependency
+                                 )
+                      ) (fmap Set.toList $
+                              Map.lookup (AnyLispName name State) (programVarDepMap prog)
+                        )
+        )
 {-
 linearExpressions :: LispProgram -> Set (SMTExpr Integer)
 linearExpressions prog = lin5

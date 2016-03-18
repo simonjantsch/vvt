@@ -83,14 +83,15 @@ main = do
    Right opts -> do
      prog <- fmap parseProgram (readLispFile stdin)
      depMap <- buildVarDependencyGraph prog
-     let lins = statesOfType IntRepr prog
-         ineqs = runIdentity $ ineqPredicates lins
-         prog1 = (if addIneqPredicates opts
-                 then prog { programPredicates = ineqs++programPredicates prog }
-                 else prog) { programVarDepMap = depMap }
+     let progWithDepMap = prog { programVarDepMap = depMap }
+         lins = statesOfTypeWithDependencies IntRepr progWithDepMap
+         ineqs = concat . runIdentity $ mapM (\(var, deps) -> ineqPredicates var deps) lins
+         prog1 = if addIneqPredicates opts
+                 then progWithDepMap { programPredicates = ineqs++programPredicates prog }
+                 else progWithDepMap
          prog2 = if addBoolPredicates opts
-                 then prog1 { programPredicates = statesOfType BoolRepr prog++
-                                                  programPredicates prog1
+                 then prog1 { programPredicates = map fst (statesOfTypeWithDependencies BoolRepr prog1)
+                                                  ++ programPredicates prog1
                             }
                  else prog1
      prog3 <- if addKarrPredicates opts
