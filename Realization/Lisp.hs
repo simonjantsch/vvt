@@ -129,7 +129,7 @@ buildVarDependencyGraph prog =
     fmap (\(_,_,c) -> c) $
     execStateT
         (mapM_ (\(k :=> v) ->
-                   do depList <- collectVariableDependencies v
+                   do depList <- collectVariableDependencies v List.nil
                       modify $ \(gateMap, _, depMap) ->
                                    ( gateMap
                                    , Set.empty
@@ -139,6 +139,7 @@ buildVarDependencyGraph prog =
     where
       collectVariableDependencies ::
           LispVar LispExpr sz
+          -> List Natural idx
           -> StateT
              (Map AnyGate (Set AnyLispName)
              , Set AnyLispName
@@ -146,11 +147,11 @@ buildVarDependencyGraph prog =
              )
              IO
              (Set AnyLispName)
-      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) =
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) _ =
           return $ Set.singleton (AnyLispName ln Input)
-      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) =
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) _ =
           return $ Set.singleton (AnyLispName ln State)
-      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) =
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) _ =
           let g = DMap.lookup ln (programGates prog)
           in do state <- get
                 let gateMap = (\(a,_,_) -> a) state
@@ -158,8 +159,7 @@ buildVarDependencyGraph prog =
                   Just gate ->
                       case Map.lookup (AnyGate ln) gateMap of
                         Nothing ->
-                            do gateDeps <- collectVariableDependencies (gateDefinition gate)
-                               --liftIO $ putStrLn $ "gate found: " ++ (show gate) ++ "deps: " ++ (show gateDeps)
+                            do gateDeps <- collectVariableDependencies (gateDefinition gate) List.nil
                                modify $ \(gateMap, b, c) -> (Map.insert (AnyGate ln) gateDeps gateMap, b, c)
                                return gateDeps
                         Just dependencies -> return dependencies
@@ -167,15 +167,16 @@ buildVarDependencyGraph prog =
                       do liftIO . putStrLn $ "no gate found!"
                          return Set.empty
 
-
-      collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) =
-          -- (concatMap collectFromExpression $ concat
-          --                $ List.toList (\e -> [e]) exprList) ++
-          Struct.flatten (\(Sized e) -> collectFromExpression e) (return . Set.unions) exprs
-      collectVariableDependencies lIte@(LispITE cond th els) =
+      collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) idx =
+          do relevantElements <- fmap snd $ Struct.access exprs idx (\el -> return ((), el))
+             Struct.flatten
+               (\(Sized e) -> collectFromExpression e)
+               (return . Set.unions)
+               relevantElements
+      collectVariableDependencies lIte@(LispITE cond th els) _ =
           do condDeps <- collectFromExpression cond
-             thenDeps <- collectVariableDependencies th
-             elseDeps <- collectVariableDependencies els
+             thenDeps <- collectVariableDependencies th List.nil
+             elseDeps <- collectVariableDependencies els List.nil
              return $ Set.unions [ condDeps
                                  , thenDeps
                                  , elseDeps
@@ -208,13 +209,13 @@ buildVarDependencyGraph prog =
              modify $ \(gateMap, _, c) -> (gateMap, Set.empty, c)
              return currentExprDependencies
 
-      collectFromExpression (LispRef var _) =
-          collectVariableDependencies var -- eigentlich sollte nur auf ein bestimmtes Element zugegriffen werden
+      collectFromExpression (LispRef var idx) =
+          collectVariableDependencies var idx
       collectFromExpression (LispSize var _) =
-          collectVariableDependencies var -- hängt eigentlich nur von dem Size Parameter in var ab
+          collectVariableDependencies var List.nil -- hängt eigentlich nur von dem Size Parameter in var ab
       collectFromExpression (LispEq var1 var2) =
-          do lhsDeps <- collectVariableDependencies var1
-             rhsDeps <- collectVariableDependencies var2
+          do lhsDeps <- collectVariableDependencies var1 List.nil
+             rhsDeps <- collectVariableDependencies var2 List.nil
              return $ Set.union lhsDeps rhsDeps
       collectFromExpression (ExactlyOne exprs) =
           do subDeps <- mapM collectFromExpression exprs
