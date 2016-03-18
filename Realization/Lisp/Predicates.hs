@@ -23,7 +23,7 @@ ineqPredicates var deps = do
   let dropVar = filter (/= var) deps
   lts <- mapM (\j -> var .<. j) dropVar
   les <- mapM (\j -> var .<=. j) dropVar
-  return (lts++les) -- ++rest)
+  return (lts++les)
 
 statesOfTypeWithDependencies :: Repr t -> LispProgram -> [(LispExpr t, [LispExpr t])]
 statesOfTypeWithDependencies repr prog =
