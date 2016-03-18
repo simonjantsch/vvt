@@ -12,19 +12,25 @@ import Data.Foldable
 import Prelude hiding (foldl)
 import Data.GADT.Compare
 import Data.Functor.Identity
+import qualified Data.Map as Map
 
-ineqPredicates :: (Embed m e,GetType e) => [e IntType] -> m [e BoolType]
-ineqPredicates [] = return []
-ineqPredicates (i:is) = do
-  lts <- mapM (\j -> i .<. j) is
-  les <- mapM (\j -> i .<=. j) is
-  rest <- ineqPredicates is
-  return (lts++les++rest)
+ineqPredicates ::
+    (Eq (e IntType), Embed m e,GetType e)
+    => e IntType
+    -> [e IntType]
+    -> m [e BoolType]
+ineqPredicates var deps = do
+  let dropVar = filter (/= var) deps
+  lts <- mapM (\j -> var .<. j) dropVar
+  les <- mapM (\j -> var .<=. j) dropVar
+  return (lts++les) -- ++rest)
 
-statesOfType :: Repr t -> LispProgram -> [LispExpr t]
-statesOfType repr prog = DMap.foldlWithKey (\lin name _
-                                            -> getStates repr name ++ lin
-                                           ) [] (programState prog)
+statesOfTypeWithDependencies :: Repr t -> LispProgram -> [(LispExpr t, [LispExpr t])]
+statesOfTypeWithDependencies repr prog =
+    DMap.foldlWithKey (\sofar name _
+                           -> let statesOfType = getStates repr name -- ++ lin
+                              in (map (collectDeps repr) statesOfType) ++ sofar
+                      ) [] (programState prog)
   where
     getStates :: Repr t -> LispName sig -> [LispExpr t]
     getStates repr name@(LispName lvl tps _) = case lvl of
@@ -34,7 +40,17 @@ statesOfType repr prog = DMap.foldlWithKey (\lin name _
                Nothing -> return [])
              (return . concat) tps
       _ -> []
-
+    collectDeps :: Repr t -> LispExpr t -> (LispExpr t, [LispExpr t])
+    collectDeps repr var@(LispRef (NamedVar name State) idx) =
+        ( var
+        , case Map.lookup (AnyLispName name State) (programVarDepMap prog) of
+            Nothing -> []
+            Just dependencies ->
+                concatMap
+                (\(AnyLispName dependency _) ->
+                     getStates repr dependency
+                ) dependencies
+        )
 {-
 linearExpressions :: LispProgram -> Set (SMTExpr Integer)
 linearExpressions prog = lin5
