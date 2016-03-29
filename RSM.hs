@@ -163,38 +163,44 @@ extractLine coeffs = do
                  | (var,IntValueC val) <- Map.toList rcoeffs
                  , val/=0 ])
 
-mineStates :: (Backend b,SMTMonad b ~ IO,Ord var, Show var) => IO b -> RSMState loc var
-              -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
-mineStates backend st
+mineStates ::
+    (Backend b, SMTMonad b ~ IO, Ord var, Show var)
+    => IO b
+    -> [Set var]
+    -> RSMState loc var
+    -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
+mineStates backend relevantVarSubsets st
   = runStateT
     (do
         nlocs <- mapM (\loc -> do
-                          sequence $
+                          newclasses <-
+                              sequence $
                               Map.mapWithKey
-                                     (\vars cls -> do
-                                        nprops <- lift $ mineClass vars cls
+                                     (\_vars cls -> do
+                                        (newclass, nprops) <- lift $ mineClass cls
                                         props <- get
                                         --liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
                                         modify (nprops++)
+                                        return newclass
                                      )(rsmClasses loc)
-                          return loc
+                          return $ RSMLoc newclasses
                       ) (rsmLocations st)
         return $ st { rsmLocations = nlocs }
     ) []
   where
-    mineClass vars cls
-      | Set.size cls <= 2 = return []
-      | Set.size cls > 6 = return []
-    mineClass vars cls = do
+    mineClass cls
+      | Set.size cls <= 2 = return (cls, [])
+      | Set.size cls > 6 = return (Set.empty, [])
+    mineClass cls = do
       --putStrLn "entered mineState"
       withBackendExitCleanly backend $ do
         setOption (ProduceUnsatCores True)
         setOption (ProduceModels True)
-        let varPairs =
-                map Set.fromList [[var1, var2] |
-                                  var1 <- (Set.toList vars)
-                                 , var2 <- (Set.toList vars)
-                                 , var1 /= var2]
+        -- let varPairs =
+        --         map Set.fromList [[var1, var2] |
+        --                           var1 <- (Set.toList vars)
+        --                          , var2 <- (Set.toList vars)
+        --                          , var1 /= var2]
         individualLines <-
             mapM
             (\vars ->
@@ -209,8 +215,10 @@ mineStates backend st
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
-            ) (vars : varPairs)
-        return $ Set.toList . Set.fromList $ foldr (++) [] individualLines
+            ) relevantVarSubsets --(vars : varPairs)
+        case individualLines of
+           [] -> return (cls, [])
+           _ -> return (Set.empty, Set.toList . Set.fromList $ foldr (++) [] individualLines)
 
 
                 --       core <- getUnsatCore

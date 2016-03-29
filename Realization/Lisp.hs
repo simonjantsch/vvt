@@ -1007,7 +1007,7 @@ instance TransitionRelation LispProgram where
        C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
     --putStrLn $ "\n **all states so far:" ++ (show (rsmStates rsm)) ++"\n"
     putStrLn $ "partial State in addRSM: " ++ (show part)
-    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) rsm1
+    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) relevantLispRevs rsm1
     putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
     endTime <- getCurrentTime
     let newRsmWithTiming = rsm2 {rsmTiming = (rsmTiming rsm2) + (diffUTCTime endTime startTime)}
@@ -1021,6 +1021,53 @@ instance TransitionRelation LispProgram where
     return (newRsmWithAllProducedLines,concat $ fmap (\ln -> [mkLine E.Ge ln
                                                    ,mkLine E.Gt ln]) (Set.toList newLines))
     where
+      -- anyLispNameToLispRevInt :: AnyLispName -> Maybe (LispRev IntType)
+      relevantVars :: [AnyLispName]
+      relevantVars = catMaybes $ map extrVal (DMap.toList full)
+          where
+            extrVal :: DSum LispName LispUVal -> Maybe AnyLispName
+            extrVal (_ :=> (LispU (Singleton (BoolValueC _)))) =
+                Nothing
+            extrVal (name :=> (LispU (Singleton (IntValueC _)))) =
+                Just (AnyLispName name State)
+            extrVal _ = Nothing
+
+      relevantVarSubsets :: [Set AnyLispName]
+      relevantVarSubsets =
+          concatMap filterRelevant . Map.toList $
+              Map.mapWithKey (\var deps ->
+                                  [ Set.insert var depSubset
+                                  | depSubset <- genSubsets deps
+                                  , (Set.size depSubset > 0)
+                                  ]
+                             ) (programVarDepMap prog)
+          where
+            genSubsets set
+                | set == Set.empty = [Set.empty]
+                | otherwise =
+                    let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
+                    in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
+
+            filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
+            filterRelevant (_, alnSetList) =
+                map (Set.filter condition) alnSetList
+                where
+                  condition name = name `elem` relevantVars
+
+      anyLispNameToLispRev :: AnyLispName -> [(LispRev IntType)]
+      anyLispNameToLispRev aln@(AnyLispName name _) =
+          case DMap.lookup name part of
+            Just (LispPVal' (LispP p)) ->
+                [ el |
+                  el <- pints (\idx val -> (LispRev name (RevVar idx))) p
+                ]
+            _ -> []
+
+      relevantLispRevs =
+          map
+          (\alnSet -> Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
+          relevantVarSubsets
+
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
           catMaybes $ map extrVal (DMap.toList full)
