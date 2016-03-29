@@ -35,9 +35,10 @@ statesOfTypeWithDependencies repr prog =
     getStates :: Repr t -> LispName sig -> [LispExpr t]
     getStates repr name@(LispName lvl tps _) = case lvl of
       Nil -> runIdentity $ Struct.flattenIndex
-             (\idx repr' -> case geq repr repr' of
-               Just Refl -> return [LispRef (NamedVar name State) idx]
-               Nothing -> return [])
+             (\idx repr' ->
+                  case geq repr repr' of
+                    Just Refl -> return [LispRef (NamedVar name State) idx]
+                    Nothing -> return [])
              (return . concat) tps
       _ -> []
     collectDeps :: Repr t -> LispExpr t -> (LispExpr t, [LispExpr t])

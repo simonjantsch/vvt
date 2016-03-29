@@ -148,7 +148,7 @@ buildVarDependencyGraph prog =
              IO
              (Set AnyLispName)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) _ =
-          return $ Set.singleton (AnyLispName ln Input)
+          return Set.empty -- $ Set.singleton (AnyLispName ln Input)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) _ =
           return $ Set.singleton (AnyLispName ln State)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) _ =
