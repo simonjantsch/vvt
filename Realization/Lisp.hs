@@ -998,88 +998,77 @@ instance TransitionRelation LispProgram where
                           ) (programState prog))
       | expr <- programPredicates prog ]
   defaultPredicateExtractor _ = return emptyRSM
-  extractPredicates prog rsm (LispConcr full) (LispPart part) = liftIO $ do
+  extractPredicates prog rsm (LispConcr full) (LispPart part) =
+    liftIO $ do
     startTime <- getCurrentTime
-    BSL.writeFile  "./states.json" $ A.encode (unpackCollectedStates $ rsmStates rsm1)
-    let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm1
-        pcStatePairs = concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
-    BSL.writeFile "./states.csv" $
-       C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
-    --putStrLn $ "\n **all states so far:" ++ (show (rsmStates rsm)) ++"\n"
     putStrLn $ "partial State in addRSM: " ++ (show part)
-    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) relevantLispRevs rsm1
+    -- (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) relevantLispRevs rsm1
+    (newRsm, lines) <- addNewPoint activePc (Point ints) rsm
     putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
     endTime <- getCurrentTime
-    let newRsmWithTiming = rsm2 {rsmTiming = (rsmTiming rsm2) + (diffUTCTime endTime startTime)}
-        alreadyProducedLines =  rsmProducedLines newRsmWithTiming
-        newRsmWithAllProducedLines = newRsmWithTiming
-                                     { rsmProducedLines =
-                                           Set.union (Set.fromList lines) alreadyProducedLines
-                                     }
-        newLines = Set.difference (Set.fromList lines) alreadyProducedLines
+    let newRsmWithTiming = newRsm {rsmTiming = (rsmTiming rsm) + (diffUTCTime endTime startTime)}
     putStrLn $ "Total Time in RSM so far: " ++ (show $ rsmTiming newRsmWithTiming )
-    return (newRsmWithAllProducedLines,concat $ fmap (\ln -> [mkLine E.Ge ln
-                                                   ,mkLine E.Gt ln]) (Set.toList newLines))
+    return (newRsmWithTiming, map (\ln -> mkLine' ln) (Set.toList lines))
     where
       -- anyLispNameToLispRevInt :: AnyLispName -> Maybe (LispRev IntType)
-      relevantVars :: [AnyLispName]
-      relevantVars = catMaybes $ map extrVal (DMap.toList full)
-          where
-            extrVal :: DSum LispName LispUVal -> Maybe AnyLispName
-            extrVal (_ :=> (LispU (Singleton (BoolValueC _)))) =
-                Nothing
-            extrVal (name :=> (LispU (Singleton (IntValueC _)))) =
-                Just (AnyLispName name State)
-            extrVal _ = Nothing
+      -- relevantVars :: [AnyLispName]
+      -- relevantVars = catMaybes $ map extrVal (DMap.toList full)
+      --     where
+      --       extrVal :: DSum LispName LispUVal -> Maybe AnyLispName
+      --       extrVal (_ :=> (LispU (Singleton (BoolValueC _)))) =
+      --           Nothing
+      --       extrVal (name :=> (LispU (Singleton (IntValueC _)))) =
+      --           Just (AnyLispName name State)
+      --       extrVal _ = Nothing
 
-      relevantVarSubsets :: [Set AnyLispName]
-      relevantVarSubsets =
-          concatMap filterRelevant . Map.toList $
-              Map.mapWithKey (\var deps ->
-                                  [ Set.insert var depSubset
-                                  | depSubset <- genSubsets deps
-                                  , (Set.size depSubset > 0)
-                                  ]
-                             ) (programVarDepMap prog)
-          where
-            genSubsets set
-                | set == Set.empty = [Set.empty]
-                | otherwise =
-                    let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
-                    in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
+      -- relevantVarSubsets :: [Set AnyLispName]
+      -- relevantVarSubsets =
+      --     concatMap filterRelevant . Map.toList $
+      --         Map.mapWithKey (\var deps ->
+      --                             [ Set.insert var depSubset
+      --                             | depSubset <- genSubsets deps
+      --                             , (Set.size depSubset > 0)
+      --                             ]
+      --                        ) (programVarDepMap prog)
+      --     where
+      --       genSubsets set
+      --           | set == Set.empty = [Set.empty]
+      --           | otherwise =
+      --               let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
+      --               in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
 
-            filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
-            filterRelevant (_, alnSetList) =
-                map (Set.filter condition) alnSetList
-                where
-                  condition name = name `elem` relevantVars
+      --       filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
+      --       filterRelevant (_, alnSetList) =
+      --           map (Set.filter condition) alnSetList
+      --           where
+      --             condition name = name `elem` relevantVars
 
-      anyLispNameToLispRev :: AnyLispName -> [(LispRev IntType)]
-      anyLispNameToLispRev aln@(AnyLispName name _) =
-          case DMap.lookup name part of
-            Just (LispPVal' (LispP p)) ->
-                [ el |
-                  el <- pints (\idx val -> (LispRev name (RevVar idx))) p
-                ]
-            _ -> []
+      -- anyLispNameToLispRev :: AnyLispName -> [(LispRev IntType)]
+      -- anyLispNameToLispRev aln@(AnyLispName name _) =
+      --     case DMap.lookup name part of
+      --       Just (LispPVal' (LispP p)) ->
+      --           [ el |
+      --             el <- pints (\idx val -> (LispRev name (RevVar idx))) p
+      --           ]
+      --       _ -> []
 
-      relevantLispRevs =
-          map
-          (\alnSet -> Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
-          relevantVarSubsets
+      -- relevantLispRevs =
+      --     map
+      --     (\alnSet -> Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
+      --     relevantVarSubsets
 
-      getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
-      getStateFromDmap full =
-          catMaybes $ map extrVal (DMap.toList full)
-          where
-            extrVal :: DSum LispName LispUVal -> Maybe (Either Bool Integer)
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
-                Just $ Left bool
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
-                Just $ Right int
-            extrVal _ = Nothing
+      -- getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
+      -- getStateFromDmap full =
+      --     catMaybes $ map extrVal (DMap.toList full)
+      --     where
+      --       extrVal :: DSum LispName LispUVal -> Maybe (Either Bool Integer)
+      --       extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
+      --           Just $ Left bool
+      --       extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
+      --           Just $ Right int
+      --       extrVal _ = Nothing
 
-      rsm1 = addRSMState activePc ints (activePc, getStateFromDmap full) rsm
+--      rsm1 = addRSMState activePc ints (activePc, getStateFromDmap full) rsm
       pcs = DMap.filterWithKey (\name val -> case DMap.lookup name (programState prog) of
                                    Just (Annotation ann) -> case Map.lookup "pc" ann of
                                      Just (L.Symbol "true") -> True
@@ -1104,7 +1093,19 @@ instance TransitionRelation LispProgram where
                   PValue (IntValueC v) -> return [f idx v]
                   _ -> return [])
                 (return.concat)
+
+      mkLine' :: [(Integer, [(LispRev IntType, Integer)])]
+              -> CompositeExpr LispState BoolType
+      mkLine' [] = error "mkLine' was called with empty line"
       
+      mkLine' conj =
+        let listOfCompExpr = map (mkLine E.Ge) conj
+            expressions = map compositeExpr listOfCompExpr
+        in CompositeExpr
+           { compositeDescr = compositeDescr (head listOfCompExpr)
+           , compositeExpr = AndLst listOfCompExpr
+           }
+
       mkLine :: E.OrdOp -> (Integer,[(LispRev IntType,Integer)])
              -> CompositeExpr LispState BoolType
       mkLine op (c,coeff)
