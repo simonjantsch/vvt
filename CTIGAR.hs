@@ -192,7 +192,7 @@ k = do
   return $ frontier cons
 
 ic3Debug :: Int -> String -> IC3 mdl ()
-ic3Debug lvl txt = ic3DebugAct lvl (liftIO $ hPutStrLn stdout txt)
+ic3Debug lvl txt = ic3DebugAct lvl (liftIO $ hPutStrLn stderr txt)
 
 ic3DebugAct :: Int -> IC3 mdl () -> IC3 mdl ()
 ic3DebugAct lvl act = do
@@ -373,7 +373,7 @@ runIC3 cfg act = do
   dom <- case domainBackend of
     AnyBackend cr -> Dom.initialDomain (ic3DebugLevel cfg) cr
                      (TR.stateAnnotation mdl)
-  (initNode,dom') <- Dom.domainAdd (mkCompExpr (TR.initialState mdl) (TR.stateAnnotation mdl)) dom
+  (initNode,_,dom') <- Dom.domainAdd (mkCompExpr (TR.initialState mdl) (TR.stateAnnotation mdl)) dom
   extractor <- TR.defaultPredicateExtractor mdl
   ref <- newIORef (IC3Env { ic3Domain = dom'
                           , ic3InitialProperty = initNode
@@ -811,7 +811,7 @@ abstractGeneralize :: TR.TransitionRelation mdl
 abstractGeneralize level cube = do
   ic3DebugAct 3 $ do
     cubeStr <- renderAbstractState cube
-    liftIO $ hPutStrLn stderr $ "mic: "++cubeStr
+    liftIO $ hPutStrLn stderr $ "mic: "++cubeStr ++ " level: " ++ (show level)
   ncube <- mic level cube
   ic3DebugAct 3 $ do
     ncubeStr <- renderAbstractState ncube
@@ -963,9 +963,13 @@ check st opts verb stats dumpDomain = do
                                  Unpacked (TR.Input mdl))]
                         [Dom.AbstractState (TR.State mdl)])
     checkIt = do
+      stats <- gets ic3Stats
+      time <- liftIO $ getCurrentTime
+      let runTimeSoFar = fmap (diffUTCTime time) (fmap startTime stats)
       ic3DebugAct 1 (do
                         lvl <- k
-                        liftIO $ hPutStrLn stderr $ "Level "++show lvl)
+                        liftIO $
+                            hPutStrLn stderr $ "Level "++show lvl ++ "\ncurrent Time:" ++ (show runTimeSoFar) ++ "\n")
       extend
       sres <- strengthen
       case sres of
@@ -1152,17 +1156,20 @@ elimSpuriousTrans st level = do
   updateStats (\stats -> stats { numRefinements = (numRefinements stats)+1
                                , numAddPreds = (numAddPreds stats)+(length props) })
   interp <- interpolateState level (stateLifted rst) (stateLiftedInputs rst)
-  ic3Debug 0 $ "mined new predicates: " ++ (show (length props))
+  ic3Debug 0 $ "mined new predicates: " ++ (show props)
   ic3Debug 0 $ "computed interpolant: " ++ (show interp)
   domain <- gets ic3Domain
   order <- gets ic3LitOrder
   (ndomain,norder) <- foldlM (\(cdomain,corder) trm
                               -> do
-                                (nd,ndom) <- liftIO $ Dom.domainAdd trm cdomain
-                                let nord = addOrderElement nd corder
+                                (nd,isNew,ndom) <- liftIO $ Dom.domainAdd trm cdomain
+                                let nord = if isNew
+                                           then addOrderElement nd corder
+                                           else corder
                                 return (ndom,nord)
                              ) (domain,order) (interp++props)
   --liftIO $ domainDump ndomain >>= putStrLn
+  ic3Debug 5 $ "newOrder: " ++ (show norder)
   modify $ \env -> env { ic3Domain = ndomain
                        , ic3LitOrder = norder }
 
@@ -1314,9 +1321,11 @@ mic' :: TR.TransitionRelation mdl
 mic' level ast recDepth = do
   order <- gets ic3LitOrder
   attempts <- asks ic3MicAttempts
+  ic3Debug 4 $ "micAttempts: " ++ (show attempts)
   let sortedAst = Vec.fromList $ sortBy (\(k1,_) (k2,_)
                                          -> compareOrder order k1 k2) $
                   Vec.toList ast
+  ic3Debug 4 $ "sorted Ast: " ++ (show sortedAst)
   mic'' sortedAst 0 attempts
   where
     mic'' ast _ 0 = do
@@ -1450,11 +1459,14 @@ addSuggestedPredicates :: TR.TransitionRelation mdl => IC3 mdl ()
 addSuggestedPredicates = do
   mdl <- asks ic3Model
   domain <- gets ic3Domain
-  ndomain <- foldlM (\cdomain (unique,trm) -> do
-                        (_,ndom) <- if unique
-                                    then liftIO $ Dom.domainAddUniqueUnsafe trm cdomain
-                                    else liftIO $ Dom.domainAdd trm cdomain
-                        return ndom
+  ndomain <- foldlM (\cdomain (unique,trm)
+                     -> if unique
+                        then do
+                          (_,ndom) <- liftIO $ Dom.domainAddUniqueUnsafe trm cdomain
+                          return ndom
+                        else do
+                          (_,_,ndom) <- liftIO $ Dom.domainAdd trm cdomain
+                          return ndom
                     ) domain (TR.suggestedPredicates mdl)
   modify $ \env -> env { ic3Domain = ndomain }
 

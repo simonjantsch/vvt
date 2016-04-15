@@ -26,6 +26,7 @@ import Data.Dependent.Sum
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Map (Map)
+import Data.Maybe(catMaybes)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -40,6 +41,7 @@ import Data.Attoparsec
 import Control.Exception
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State.Strict
+import Control.Monad.Trans.State.Strict as SM
 import Control.Monad.Trans
 import Data.Functor.Identity
 import Data.Time.Clock
@@ -62,6 +64,7 @@ data LispProgram
                 , programInvariant :: [LispExpr BoolType]
                 , programAssumption :: [LispExpr BoolType]
                 , programPredicates :: [LispExpr BoolType]
+                , programVarDepMap :: Map AnyLispName (Set AnyLispName)
                 } deriving Show
 
 data LispGate (sig :: ([Type],Tree Type)) = LispGate { gateDefinition :: LispVar LispExpr sig
@@ -101,6 +104,125 @@ data LispExpr (t::Type) where
          -> LispExpr BoolType
   ExactlyOne :: [LispExpr BoolType] -> LispExpr BoolType
   AtMostOne :: [LispExpr BoolType] -> LispExpr BoolType
+
+data AnyLispName = forall a. AnyLispName (LispName a) LispVarCat
+
+instance Ord AnyLispName where
+    compare (AnyLispName n1 cat1) (AnyLispName n2 cat2) = defaultCompare n1 n2
+
+instance Eq AnyLispName where
+  AnyLispName n1 cat1 == AnyLispName n2 cat2 = defaultEq n1 n2 && cat1==cat2
+
+instance Show AnyLispName where
+    showsPrec p (AnyLispName n c) = showParen (p>10) $ showString "AnyLispName " . gshowsPrec 11 n . showChar ' ' . showsPrec 11 c
+
+data AnyGate = forall a. AnyGate (LispName a)
+
+instance Eq AnyGate where
+    AnyGate g1 == AnyGate g2 = defaultEq g1 g2
+
+instance Ord AnyGate where
+    compare (AnyGate g1) (AnyGate g2) = defaultCompare g1 g2
+
+buildVarDependencyGraph :: LispProgram -> IO (Map AnyLispName (Set AnyLispName))
+buildVarDependencyGraph prog =
+    fmap (\(_,_,c) -> c) $
+    execStateT
+        (mapM_ (\(k :=> v) ->
+                   do depList <- collectVariableDependencies v List.nil
+                      modify $ \(gateMap, _, depMap) ->
+                                   ( gateMap
+                                   , Set.empty
+                                   , Map.insert (AnyLispName k State) depList depMap)
+              ) (DMap.toList $ programNext prog)
+        ) (Map.empty, Set.empty, Map.empty)
+    where
+      collectVariableDependencies ::
+          LispVar LispExpr sz
+          -> List Natural idx
+          -> StateT
+             (Map AnyGate (Set AnyLispName)
+             , Set AnyLispName
+             , Map AnyLispName (Set AnyLispName)
+             )
+             IO
+             (Set AnyLispName)
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) _ =
+          return Set.empty -- $ Set.singleton (AnyLispName ln Input)
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) _ =
+          return $ Set.singleton (AnyLispName ln State)
+      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) _ =
+          let g = DMap.lookup ln (programGates prog)
+          in do state <- get
+                let gateMap = (\(a,_,_) -> a) state
+                case g of
+                  Just gate ->
+                      case Map.lookup (AnyGate ln) gateMap of
+                        Nothing ->
+                            do gateDeps <- collectVariableDependencies (gateDefinition gate) List.nil
+                               modify $ \(gateMap, b, c) -> (Map.insert (AnyGate ln) gateDeps gateMap, b, c)
+                               return gateDeps
+                        Just dependencies -> return dependencies
+                  Nothing ->
+                      do liftIO . putStrLn $ "no gate found!"
+                         return Set.empty
+
+      collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) idx =
+          do relevantElements <- fmap snd $ Struct.access exprs idx (\el -> return ((), el))
+             Struct.flatten
+               (\(Sized e) -> collectFromExpression e)
+               (return . Set.unions)
+               relevantElements
+      collectVariableDependencies lIte@(LispITE cond th els) _ =
+          do condDeps <- collectFromExpression cond
+             thenDeps <- collectVariableDependencies th List.nil
+             elseDeps <- collectVariableDependencies els List.nil
+             return $ Set.unions [ condDeps
+                                 , thenDeps
+                                 , elseDeps
+                                 ]
+
+      collectFromExpression ::
+          LispExpr t
+          -> StateT
+             (Map AnyGate (Set AnyLispName)
+             , Set AnyLispName
+             , Map AnyLispName (Set AnyLispName)
+             )
+             IO
+             (Set AnyLispName)
+      collectFromExpression (LispExpr expr) =
+          do _ <- E.mapExpr
+                  return
+                  return
+                  return
+                  return
+                  return
+                  return
+                  return
+                  (\expr -> do subDeps <- collectFromExpression expr
+                               modify $ \(a, b, c) -> (a, Set.union subDeps b, c)
+                               return expr
+                  ) expr
+             state <- get
+             let currentExprDependencies = (\(_,b,_) -> b) state
+             modify $ \(gateMap, _, c) -> (gateMap, Set.empty, c)
+             return currentExprDependencies
+
+      collectFromExpression (LispRef var idx) =
+          collectVariableDependencies var idx
+      collectFromExpression (LispSize var _) =
+          collectVariableDependencies var List.nil -- hängt eigentlich nur von dem Size Parameter in var ab
+      collectFromExpression (LispEq var1 var2) =
+          do lhsDeps <- collectVariableDependencies var1 List.nil
+             rhsDeps <- collectVariableDependencies var2 List.nil
+             return $ Set.union lhsDeps rhsDeps
+      collectFromExpression (ExactlyOne exprs) =
+          do subDeps <- mapM collectFromExpression exprs
+             return $ Set.unions subDeps
+      collectFromExpression (AtMostOne exprs) =
+          do subDeps <- mapM collectFromExpression exprs
+             return $ Set.unions subDeps
 
 data LispSort = forall (sz :: [Type]) (tp::Tree Type).
                 LispSort (List Repr sz) (Struct Repr tp)
@@ -211,7 +333,7 @@ programToLisp :: LispProgram -> L.Lisp
 programToLisp prog = L.List (L.Symbol "program":elems)
   where
     elems = ann ++ states ++ inputs ++ gates ++ next ++ init ++
-            prop ++ invar ++ assump ++ preds
+            prop ++ invar ++ assump ++ preds ++ varDepMap
     ann = annToLisp (programAnnotation prog)
     states = if DMap.null (programState prog)
              then []
@@ -268,6 +390,17 @@ programToLisp prog = L.List (L.Symbol "program":elems)
             then []
             else [L.List (L.Symbol "predicates":preds')]
     preds' = [ lispExprToLisp p | p <- programPredicates prog ]
+    varDepMap = if null (programVarDepMap prog)
+                then []
+                else [L.List (L.Symbol "variableDependencies":varDepMap')]
+    varDepMap' = [ let varDeps =
+                           map (\ln@(AnyLispName (LispName _ _ name) _)
+                                    -> L.Symbol name
+                               ) (Set.toList depSet)
+                   in  L.List (L.Symbol name:[L.List varDeps])
+                 | (AnyLispName (LispName _ _ name) _, depSet) <-
+                     Map.toList (programVarDepMap prog)
+                 ]
 
 lispExprToLisp :: LispExpr t -> L.Lisp
 lispExprToLisp (LispExpr e)
@@ -422,7 +555,8 @@ parseProgram descr = case descr of
                       , programInit = init
                       , programInvariant = invar
                       , programAssumption = assume
-                      , programPredicates = preds }
+                      , programPredicates = preds
+                      , programVarDepMap = Map.empty}
 
 parseAnnotation :: [L.Lisp] -> Map T.Text L.Lisp -> (Map T.Text L.Lisp,[L.Lisp])
 parseAnnotation [] cur = (cur,[])
@@ -813,7 +947,7 @@ instance GetType LispRev where
     = List.index (sizeListType sz) i
 
 instance TransitionRelation LispProgram where
-  type State LispProgram = LispState 
+  type State LispProgram = LispState
   type Input LispProgram = LispState
   type RealizationProgress LispProgram = LispState
   type PredicateExtractor LispProgram = RSMState (Set T.Text) (LispRev IntType)
@@ -873,7 +1007,7 @@ instance TransitionRelation LispProgram where
        C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
     --putStrLn $ "\n **all states so far:" ++ (show (rsmStates rsm)) ++"\n"
     putStrLn $ "partial State in addRSM: " ++ (show part)
-    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) rsm1
+    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) relevantLispRevs rsm1
     putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
     endTime <- getCurrentTime
     let newRsmWithTiming = rsm2 {rsmTiming = (rsmTiming rsm2) + (diffUTCTime endTime startTime)}
@@ -887,15 +1021,63 @@ instance TransitionRelation LispProgram where
     return (newRsmWithAllProducedLines,concat $ fmap (\ln -> [mkLine E.Ge ln
                                                    ,mkLine E.Gt ln]) (Set.toList newLines))
     where
+      -- anyLispNameToLispRevInt :: AnyLispName -> Maybe (LispRev IntType)
+      relevantVars :: [AnyLispName]
+      relevantVars = catMaybes $ map extrVal (DMap.toList full)
+          where
+            extrVal :: DSum LispName LispUVal -> Maybe AnyLispName
+            extrVal (_ :=> (LispU (Singleton (BoolValueC _)))) =
+                Nothing
+            extrVal (name :=> (LispU (Singleton (IntValueC _)))) =
+                Just (AnyLispName name State)
+            extrVal _ = Nothing
+
+      relevantVarSubsets :: [Set AnyLispName]
+      relevantVarSubsets =
+          concatMap filterRelevant . Map.toList $
+              Map.mapWithKey (\var deps ->
+                                  [ Set.insert var depSubset
+                                  | depSubset <- genSubsets deps
+                                  , (Set.size depSubset > 0)
+                                  ]
+                             ) (programVarDepMap prog)
+          where
+            genSubsets set
+                | set == Set.empty = [Set.empty]
+                | otherwise =
+                    let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
+                    in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
+
+            filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
+            filterRelevant (_, alnSetList) =
+                map (Set.filter condition) alnSetList
+                where
+                  condition name = name `elem` relevantVars
+
+      anyLispNameToLispRev :: AnyLispName -> [(LispRev IntType)]
+      anyLispNameToLispRev aln@(AnyLispName name _) =
+          case DMap.lookup name part of
+            Just (LispPVal' (LispP p)) ->
+                [ el |
+                  el <- pints (\idx val -> (LispRev name (RevVar idx))) p
+                ]
+            _ -> []
+
+      relevantLispRevs =
+          map
+          (\alnSet -> Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
+          relevantVarSubsets
+
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
-          map extrVal (DMap.toList full)
+          catMaybes $ map extrVal (DMap.toList full)
           where
-            extrVal :: DSum LispName LispUVal -> Either Bool Integer
+            extrVal :: DSum LispName LispUVal -> Maybe (Either Bool Integer)
             extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
-                Left bool
+                Just $ Left bool
             extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
-                Right int
+                Just $ Right int
+            extrVal _ = Nothing
 
       rsm1 = addRSMState activePc ints (activePc, getStateFromDmap full) rsm
       pcs = DMap.filterWithKey (\name val -> case DMap.lookup name (programState prog) of

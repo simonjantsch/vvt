@@ -97,7 +97,7 @@ createLine coeffs vars = do
            embed $ PlusLst rxs
   let rhs = coeffsConst coeffs
       line = lhs :==: rhs
-  liftIO $ putStrLn (show line)
+  --liftIO $ putStrLn (show line)
   embed $ line
 
 createLines :: (Backend b,Ord var, MonadIO (SMTMonad b)) => Coeffs b var -> Set (Map var Integer)
@@ -163,41 +163,44 @@ extractLine coeffs = do
                  | (var,IntValueC val) <- Map.toList rcoeffs
                  , val/=0 ])
 
-mineStates :: (Backend b,SMTMonad b ~ IO,Ord var, Show var) => IO b -> RSMState loc var
-              -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
-mineStates backend st
+mineStates ::
+    (Backend b, SMTMonad b ~ IO, Ord var, Show var)
+    => IO b
+    -> [Set var]
+    -> RSMState loc var
+    -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
+mineStates backend relevantVarSubsets st
   = runStateT
     (do
         nlocs <- mapM (\loc -> do
-                          sequence $
+                          newclasses <-
+                              sequence $
                               Map.mapWithKey
-                                     (\vars cls -> do
-                                        nprops <- lift $ mineClass vars cls
+                                     (\_vars cls -> do
+                                        (newclass, nprops) <- lift $ mineClass cls
                                         props <- get
-                                        liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
+                                        --liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
                                         modify (nprops++)
+                                        return newclass
                                      )(rsmClasses loc)
-                          return loc
+                          return $ RSMLoc newclasses
                       ) (rsmLocations st)
         return $ st { rsmLocations = nlocs }
     ) []
   where
-    mineClass vars cls
-      | Set.size cls <= 2 = return []
-      | Set.size cls > 6 = return []
-    mineClass vars cls = do
-      putStrLn "entered mineState"
+    mineClass cls
+      | Set.size cls <= 2 = return (cls, [])
+      | Set.size cls > 6 = return (Set.empty, [])
+    mineClass cls = do
+      --putStrLn "entered mineState"
       withBackendExitCleanly backend $ do
         setOption (ProduceUnsatCores True)
         setOption (ProduceModels True)
-        let
-            genSubsets set
-                | set == Set.empty = [Set.empty]
-                | otherwise =
-                    let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
-                    in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
-            varSubsets = [x | x <- genSubsets vars, (Set.size x > 1)]
-        liftIO $ putStrLn (show varSubsets)
+        -- let varPairs =
+        --         map Set.fromList [[var1, var2] |
+        --                           var1 <- (Set.toList vars)
+        --                          , var2 <- (Set.toList vars)
+        --                          , var1 /= var2]
         individualLines <-
             mapM
             (\vars ->
@@ -208,32 +211,11 @@ mineStates backend st
                    res <- checkSat
                    case res of
                      Sat -> do
-                        liftIO $ putStrLn "\n\n***found a Line***\n\n"
+                        --liftIO $ putStrLn "\n\n***found a Line***\n\n"
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
-            ) varSubsets
-        return $ Set.toList . Set.fromList $ foldr (++) [] individualLines
-
-
-                --       core <- getUnsatCore
-                --       let coreMp = Map.fromList [ (cid,()) | cid <- core ]
-                --           coreLines = Set.fromList $ Map.elems $ Map.intersection revMp coreMp
-                --       return $ Left coreLines
-                -- case res of
-                --   Right lines -> return (Just (Set.empty,[lines]))
-                --   Left coreLines -> do
-                --       let noCoreLines = Set.difference cls coreLines
-                --           Just (coreLine1,coreLines1) = Set.minView coreLines
-                --           Just (coreLine2,coreLines2) = Set.minView coreLines1
-                --       res1 <- mineClass vars (Set.insert coreLine1 noCoreLines)
-                --       case res1 of
-                --         Just (ncls,lines) -> return (Just (Set.union coreLines1 ncls,lines))
-                --         Nothing -> do
-                --            res2 <- mineClass vars (Set.insert coreLine2 noCoreLines)
-                --            case res2 of
-                --              Just (ncls,lines) -> return (Just (Set.insert coreLine1 $
-                --                                                 Set.union coreLines2 ncls,lines)
-                --                                          )
-                --              Nothing -> return Nothing
-
+            ) relevantVarSubsets --(vars : varPairs)
+        case individualLines of
+           [] -> return (cls, [])
+           _ -> return (Set.empty, Set.toList . Set.fromList $ foldr (++) [] individualLines)

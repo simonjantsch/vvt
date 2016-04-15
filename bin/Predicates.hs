@@ -11,6 +11,7 @@ import Language.SMTLib2.Internals.Type (Repr(..))
 
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.Typeable
 import System.Console.GetOpt
 import System.Environment
 import System.Exit
@@ -25,7 +26,7 @@ data Options = Options { addKarrPredicates :: Bool
 
 defaultOptions :: Options
 defaultOptions = Options { addKarrPredicates = False
-                         , addIneqPredicates = True
+                         , addIneqPredicates = False
                          , addBoolPredicates = True
                          , optShowHelp = False }
 
@@ -81,14 +82,16 @@ main = do
      exitWith (ExitFailure (-1))
    Right opts -> do
      prog <- fmap parseProgram (readLispFile stdin)
-     let lins = statesOfType IntRepr prog
-         ineqs = runIdentity $ ineqPredicates lins
+     depMap <- buildVarDependencyGraph prog
+     let progWithDepMap = prog { programVarDepMap = depMap }
+         lins = statesOfTypeWithDependencies IntRepr progWithDepMap
+         ineqs = concat . runIdentity $ mapM (\(var, deps) -> ineqPredicates var deps) lins
          prog1 = if addIneqPredicates opts
-                 then prog { programPredicates = ineqs++programPredicates prog }
-                 else prog
+                 then progWithDepMap { programPredicates = ineqs++programPredicates prog }
+                 else progWithDepMap
          prog2 = if addBoolPredicates opts
-                 then prog1 { programPredicates = statesOfType BoolRepr prog++
-                                                  programPredicates prog1
+                 then prog1 { programPredicates = map fst (statesOfTypeWithDependencies BoolRepr prog1)
+                                                  ++ programPredicates prog1
                             }
                  else prog1
      prog3 <- if addKarrPredicates opts
@@ -97,4 +100,6 @@ main = do
                                 (karrPredicates prog)
                        return (prog2 { programPredicates = preds++programPredicates prog2 }))
               else return prog2
+     hPutStrLn stderr $ show depMap
      print $ programToLisp prog3
+
