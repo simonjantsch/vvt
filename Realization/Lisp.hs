@@ -815,7 +815,7 @@ parseLispExpr state inps gates srt expr f
     parser = LispParser { parseFunction = \_ _ _ _ _ _ -> throwE $ "Invalid function"
                         , parseDatatype = \_ _ -> throwE $ "Invalid datatype"
                         , parseVar = \_ _ _ _ _ _ -> throwE $ "Invalid variable"
-                        , parseRecursive = parseLispExpr state inps gates
+                        , parseRecursive = \_ -> parseLispExpr state inps gates
                         , registerQVar = \_ _ -> (NoRef,parser)
                         , registerLetVar = \_ _ -> (NoRef,parser) }
 
@@ -945,10 +945,6 @@ instance GetType LispRev where
     = arrayType sz (Struct.elementIndex tps idx)
   getType (LispRev (LispName sz tps _) (RevSize i))
     = List.index (sizeListType sz) i
-
-instance (Show a, Show b) => C.ToField (Either a b) where
-    toField (Right r) = BSL.toStrict $ BSL.fromString (show r)
-    toField (Left l) = BSL.toStrict $ BSL.fromString (show l)
 
 instance TransitionRelation LispProgram where
   type State LispProgram = LispState

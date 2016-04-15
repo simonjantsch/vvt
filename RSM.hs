@@ -9,12 +9,10 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Language.SMTLib2
 import Language.SMTLib2.Internals.Backend (SMTMonad)
-import Language.SMTLib2.Internals.Type
-import Language.SMTLib2.Internals.Interface hiding (constant)
 import qualified Language.SMTLib2.Internals.Interface as I
 import Language.SMTLib2.Internals.Embed
 import "mtl" Control.Monad.State (runStateT,modify, get)
-import "mtl" Control.Monad.Trans (lift, liftIO, MonadIO)
+import "mtl" Control.Monad.Trans (lift, MonadIO)
 import Prelude hiding (mapM,sequence)
 import Data.Aeson as A
 import Data.Traversable (mapM,sequence)
