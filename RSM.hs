@@ -16,6 +16,7 @@ import Language.SMTLib2.Internals.Embed
 import "mtl" Control.Monad.State (runStateT,modify, get)
 import "mtl" Control.Monad.Trans (lift, liftIO, MonadIO)
 import Prelude hiding (mapM,sequence)
+import Data.Aeson as A
 import Data.Traversable (mapM,sequence)
 import Data.GADT.Show
 import Data.GADT.Compare
@@ -28,6 +29,9 @@ newtype CollectedStates =
     CollectedStates
     { unpackCollectedStates :: Map T.Text [[Either Bool Integer]] }
     deriving G.Generic
+
+instance A.ToJSON CollectedStates
+
 
 data RSMState loc var = RSMState { rsmLocations :: Map loc (RSMLoc var)
                                  , rsmStates :: CollectedStates

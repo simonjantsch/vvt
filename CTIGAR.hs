@@ -23,16 +23,13 @@ import Language.SMTLib2.Internals.Backend (SMTMonad,LVar)
 import qualified Language.SMTLib2.Internals.Backend as B
 import Language.SMTLib2.Internals.Interface
 import qualified Language.SMTLib2.Internals.Expression as E
-import Language.SMTLib2.Internals.Type
 import qualified Language.SMTLib2.Internals.Type.List as List
 import Language.SMTLib2.Internals.Embed
 
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import qualified Data.Vector as Vec
 import qualified Data.IntSet as IntSet
 import qualified Data.Yaml as Y
---import GHC.Generics
 import Data.IORef
 import Control.Monad (when)
 import Data.Functor.Identity
@@ -82,6 +79,8 @@ data IC3Config mdl
            , ic3MaxCTGs :: Int
            , ic3CollectStats :: Bool
            , ic3DumpDomainFile :: Maybe String
+           , ic3DumpStatsFile :: Maybe String
+           , ic3DumpStatesFile :: Maybe String
            }
 
 data IC3Env mdl
@@ -210,34 +209,24 @@ mkIC3Config :: mdl -> BackendOptions
             -> Int -- ^ Verbosity
             -> Bool -- ^ Dump stats?
             -> Maybe String -- ^ Dump domain?
+            -> Maybe String -- ^ Dump stats?
+            -> Maybe String -- ^ Dump states?
             -> IC3Config mdl
-mkIC3Config mdl opts verb stats dumpDomain
+mkIC3Config mdl opts verb stats dumpDomain dumpStats dumpStates
   = IC3Cfg { ic3Model = mdl
            , ic3ConsecutionBackend = mkPipe (optBackend opts Map.! ConsecutionBackend)
-                                     (if Set.member ConsecutionBackend (optDebugBackend opts)
-                                      then Just "cons"
-                                      else Nothing)
+                                     (fmap (\t -> ("cons",t)) $ Map.lookup ConsecutionBackend (optDebugBackend opts))
            , ic3LiftingBackend = mkPipe (optBackend opts Map.! Lifting)
-                                 (if Set.member Lifting (optDebugBackend opts)
-                                  then Just "lift"
-                                  else Nothing)
+                                 (fmap (\t -> ("lift",t)) $ Map.lookup Lifting (optDebugBackend opts))
            , ic3DomainBackend = mkPipe (optBackend opts Map.! Domain)
-                                (if Set.member Domain (optDebugBackend opts)
-                                 then Just "domain"
-                                 else Nothing)
+                                (fmap (\t -> ("domain",t)) $ Map.lookup Domain (optDebugBackend opts))
            , ic3BaseBackend = mkPipe (optBackend opts Map.! Base)
-                              (if Set.member Base (optDebugBackend opts)
-                               then Just "base"
-                               else Nothing)
+                              (fmap (\t -> ("base",t)) $ Map.lookup Base (optDebugBackend opts))
            , ic3InitBackend = mkPipe (optBackend opts Map.! Initiation)
-                              (if Set.member Initiation (optDebugBackend opts)
-                               then Just "init"
-                               else Nothing)
+                              (fmap (\t -> ("init",t)) $ Map.lookup Initiation (optDebugBackend opts))
            , ic3InterpolationBackend = addModulusEmulation $
                                        mkPipe (optBackend opts Map.! Interpolation)
-                                       (if Set.member Interpolation (optDebugBackend opts)
-                                        then Just "interp"
-                                        else Nothing)
+                                       (fmap (\t -> ("interp",t)) $ Map.lookup Interpolation (optDebugBackend opts))
            , ic3DebugLevel = verb
            , ic3MaxSpurious = 0
            , ic3MicAttempts = 1 `shiftL` 20
@@ -246,14 +235,16 @@ mkIC3Config mdl opts verb stats dumpDomain
            , ic3MaxCTGs = 3
            , ic3CollectStats = stats
            , ic3DumpDomainFile = dumpDomain
+           , ic3DumpStatsFile = dumpStats
+           , ic3DumpStatesFile = dumpStates
            }
   where
-    mkPipe :: BackendUse -> Maybe String -> AnyBackend IO
+    mkPipe :: BackendUse -> Maybe (String,BackendDebug) -> AnyBackend IO
     mkPipe cmd debug = createBackend cmd (\b -> case debug of
                                            Nothing -> AnyBackend b
-                                           Just name -> AnyBackend $ do
+                                           Just (name,tp) -> AnyBackend $ do
                                              b' <- b
-                                             return (namedDebugBackend name b'))
+                                             createDebugBackend name tp b')
 
 runIC3 :: TR.TransitionRelation mdl => IC3Config mdl -> IC3 mdl a -> IO a
 runIC3 cfg act = do
@@ -930,13 +921,15 @@ check :: TR.TransitionRelation mdl
          -> Int -- ^ Verbosity
          -> Bool -- ^ Dump stats?
          -> Maybe String -- ^ Dump domain?
+         -> Maybe String -- ^ Dump stats?
+         -> Maybe String -- ^ Dump states?
          -> IO (Either [(Unpacked (TR.State mdl),
                          Unpacked (TR.Input mdl))]
                        (CompositeExpr (TR.State mdl) BoolType))
-check st opts verb stats dumpDomain = do
+check st opts verb stats dumpDomain dumpstats dumpstates = do
   tr <- createBackend (optBackend opts Map.! Base) $
         \b -> withBackendExitCleanly b (baseCases st)
-  runIC3 (mkIC3Config st opts verb stats dumpDomain) $ do
+  runIC3 (mkIC3Config st opts verb stats dumpDomain dumpstats dumpstates) $ do
     case tr of
       Just tr' -> do
         ic3DumpStats Nothing
@@ -1046,7 +1039,7 @@ check st opts verb stats dumpDomain = do
       concrs <- getWitness real xs
       return $ (concr1,concr2):concrs
 
-getFixpoint :: (Embed m e,Composite st)
+getFixpoint :: (Embed m e,GetType e,Composite st)
             => Dom.Domain st -> [Dom.AbstractState st] -> st e
             -> m (e BoolType)
 getFixpoint domain sts inp = do
@@ -1149,9 +1142,11 @@ elimSpuriousTrans st level = do
   rst <- liftIO $ readIORef st
   backend <- asks ic3BaseBackend
   extr <- gets ic3PredicateExtractor
+  mbDumpStatesFile <- asks ic3DumpStatesFile
   (nextr,props) <- TR.extractPredicates mdl extr
                    (stateFull rst)
                    (stateLifted rst)
+                   mbDumpStatesFile
   modify $ \env -> env { ic3PredicateExtractor = nextr }
   updateStats (\stats -> stats { numRefinements = (numRefinements stats)+1
                                , numAddPreds = (numAddPreds stats)+(length props) })
@@ -1672,31 +1667,34 @@ ic3DumpStats fp = do
        putStrLn $ "% unlifted: "++
          (show $ (round $ 100*(fromIntegral $ numUnliftedErased stats) /
                   (fromIntegral $ numErased stats) :: Int))
-
-       let mrsStats =
-               IC3MachineReadableStats { mrs_totalTime = realToFrac totalRuntime
-                                       , mrs_consecutionTime = realToFrac consTime
-                                       , mrs_consecutionNum = consNum
-                                       , mrs_domainTime = realToFrac domTime
-                                       , mrs_domainNum = domNum
-                                       , mrs_interpolationTime = realToFrac interpTime
-                                       , mrs_interpolationNum = interpNum
-                                       , mrs_liftingTime = realToFrac liftTime
-                                       , mrs_liftingNum = liftNum
-                                       , mrs_initiationTime = realToFrac initTime
-                                       , mrs_initiationNum = initNum
-                                       , mrs_numErased = numErased stats
-                                       , mrs_numCTI = numCTI stats
-                                       , mrs_numUnliftedErased = numUnliftedErased stats
-                                       , mrs_numCTG = numCTG stats
-                                       , mrs_numMIC = numMIC stats
-                                       , mrs_numCoreReduced = numCoreReduced stats
-                                       , mrs_numAbortJoin = numAbortJoin stats
-                                       , mrs_numAbortMic = numAbortMic stats
-                                       , mrs_numRefinements = numRefinements stats
-                                       , mrs_numAddPreds = numAddPreds stats
-                                       , mrs_numPreds = numPreds}
-       Y.encodeFile "./stats.yaml" mrsStats
+     dumpStats <- asks ic3DumpStatsFile
+     case dumpStats of
+       Nothing -> return ()
+       Just file ->
+           let mrsStats = IC3MachineReadableStats
+                          { mrs_totalTime = realToFrac totalRuntime
+                          , mrs_consecutionTime = realToFrac consTime
+                          , mrs_consecutionNum = consNum
+                          , mrs_domainTime = realToFrac domTime
+                          , mrs_domainNum = domNum
+                          , mrs_interpolationTime = realToFrac interpTime
+                          , mrs_interpolationNum = interpNum
+                          , mrs_liftingTime = realToFrac liftTime
+                          , mrs_liftingNum = liftNum
+                          , mrs_initiationTime = realToFrac initTime
+                          , mrs_initiationNum = initNum
+                          , mrs_numErased = numErased stats
+                          , mrs_numCTI = numCTI stats
+                          , mrs_numUnliftedErased = numUnliftedErased stats
+                          , mrs_numCTG = numCTG stats
+                          , mrs_numMIC = numMIC stats
+                          , mrs_numCoreReduced = numCoreReduced stats
+                          , mrs_numAbortJoin = numAbortJoin stats
+                          , mrs_numAbortMic = numAbortMic stats
+                          , mrs_numRefinements = numRefinements stats
+                          , mrs_numAddPreds = numAddPreds stats
+                          , mrs_numPreds = numPreds}
+           in liftIO $ Y.encodeFile file mrsStats
    Nothing -> return ()
   dumpDomain <- asks ic3DumpDomainFile
   case dumpDomain of

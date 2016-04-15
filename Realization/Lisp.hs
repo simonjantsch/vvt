@@ -946,6 +946,10 @@ instance GetType LispRev where
   getType (LispRev (LispName sz tps _) (RevSize i))
     = List.index (sizeListType sz) i
 
+instance (Show a, Show b) => C.ToField (Either a b) where
+    toField (Right r) = BSL.toStrict $ BSL.fromString (show r)
+    toField (Left l) = BSL.toStrict $ BSL.fromString (show l)
+
 instance TransitionRelation LispProgram where
   type State LispProgram = LispState
   type Input LispProgram = LispState
@@ -998,18 +1002,18 @@ instance TransitionRelation LispProgram where
                           ) (programState prog))
       | expr <- programPredicates prog ]
   defaultPredicateExtractor _ = return emptyRSM
-  extractPredicates prog rsm (LispConcr full) (LispPart part) = liftIO $ do
+  extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = liftIO $ do
     startTime <- getCurrentTime
-    BSL.writeFile  "./states.json" $ A.encode (unpackCollectedStates $ rsmStates rsm1)
-    let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm1
-        pcStatePairs = concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
-    BSL.writeFile "./states.csv" $
-       C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
-    --putStrLn $ "\n **all states so far:" ++ (show (rsmStates rsm)) ++"\n"
-    putStrLn $ "partial State in addRSM: " ++ (show part)
     (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) relevantLispRevs rsm1
-    putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
     endTime <- getCurrentTime
+    case mDumpStates of
+      Nothing -> return ()
+      Just file ->
+          let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm2
+              pcStatePairs =
+                  concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
+          in BSL.writeFile file $
+             C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
     let newRsmWithTiming = rsm2 {rsmTiming = (rsmTiming rsm2) + (diffUTCTime endTime startTime)}
         alreadyProducedLines =  rsmProducedLines newRsmWithTiming
         newRsmWithAllProducedLines = newRsmWithTiming
@@ -1021,7 +1025,6 @@ instance TransitionRelation LispProgram where
     return (newRsmWithAllProducedLines,concat $ fmap (\ln -> [mkLine E.Ge ln
                                                    ,mkLine E.Gt ln]) (Set.toList newLines))
     where
-      -- anyLispNameToLispRevInt :: AnyLispName -> Maybe (LispRev IntType)
       relevantVars :: [AnyLispName]
       relevantVars = catMaybes $ map extrVal (DMap.toList full)
           where

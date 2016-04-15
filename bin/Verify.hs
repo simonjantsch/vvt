@@ -22,6 +22,8 @@ data Options = Options { optBackends :: BackendOptions
                        , optStats :: Bool
                        , optDumpDomain :: Maybe String
                        , optPrintFixpoint :: Bool
+                       , optDumpStats :: Maybe String
+                       , optDumpStates :: Maybe String
                        }
 
 defaultOptions :: Options
@@ -31,7 +33,9 @@ defaultOptions = Options { optBackends = defaultBackendOptions
                          , optVerbosity = 2
                          , optStats = True
                          , optDumpDomain = Nothing
-                         , optPrintFixpoint = True
+                         , optDumpStats = Nothing
+                         , optDumpStates = Nothing
+                         , optPrintFixpoint = False
                          }
 
 allOpts :: [OptDescr (Options -> Options)]
@@ -46,11 +50,10 @@ allOpts
                         }) "<backend>:solver")
      "The SMT solver used for the specified backend."
     ,Option [] ["debug-backend"]
-     (ReqArg (\b opt -> case readsPrec 0 b of
-               [(backend,[])]
-                 -> opt { optBackends = setDebugBackend backend
-                                        (optBackends opt)
-                        }) "<backend>")
+     (ReqArg (\b opt -> case [ x | (x,"") <- readBackendDebug b ] of
+                 (tp,dbg):_
+                   -> opt { optBackends = setDebugBackend tp dbg (optBackends opt)
+                          }) "<backend>")
      "Output the communication with the specified backend solver."
     ,Option ['t'] ["timeout"]
      (ReqArg (\t opt -> opt { optTimeout = Just $ parseTime t }) "time")
@@ -65,6 +68,12 @@ allOpts
     ,Option [] ["dump-domain"]
      (ReqArg (\file opt -> opt { optDumpDomain = Just file }) "file")
      "Dump the domain graph into a file."
+    ,Option [] ["dump-stats-to"]
+     (ReqArg (\file opt -> opt { optDumpStats = Just file }) "file")
+     "Dump the stats that IC3 produces to a file."
+    ,Option [] ["dump-states-to"]
+     (ReqArg (\file opt -> opt { optDumpStates = Just file }) "file")
+     "Dump the states that IC3 collects during refinement to a file. The states will be printed in csv format."
     ,Option [] ["print-fixpoint"]
      (NoArg $ \opt -> opt { optPrintFixpoint = True }) "If the program can be proven correct, output the fixpoint."
     ]
@@ -127,6 +136,8 @@ main = do
                        (optVerbosity opts)
                        (optStats opts)
                        (optDumpDomain opts)
+                       (optDumpStats opts)
+                       (optDumpStates opts)
             Just to -> do
               mainThread <- myThreadId
               timeoutThread <- forkOS (threadDelay to >> throwTo mainThread (ExitFailure (-2)))
@@ -136,6 +147,8 @@ main = do
                                       (optVerbosity opts)
                                       (optStats opts)
                                       (optDumpDomain opts)
+                                      (optDumpStats opts)
+                                      (optDumpStates opts)
                                killThread timeoutThread
                                return (Just res)
                            )
