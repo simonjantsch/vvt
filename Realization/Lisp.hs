@@ -46,6 +46,8 @@ import Control.Monad.Trans
 import Data.Functor.Identity
 import Data.Time.Clock
 
+import System.IO
+
 data LispName (sig :: ([Type],Tree Type)) where
   LispName :: List Repr sz -> Struct Repr tp -> T.Text -> LispName '(sz,tp)
 
@@ -998,77 +1000,33 @@ instance TransitionRelation LispProgram where
                           ) (programState prog))
       | expr <- programPredicates prog ]
   defaultPredicateExtractor _ = return emptyRSM
-  extractPredicates prog rsm (LispConcr full) (LispPart part) =
-    liftIO $ do
+  extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = liftIO $ do
     startTime <- getCurrentTime
-    putStrLn $ "partial State in addRSM: " ++ (show part)
-    -- (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) relevantLispRevs rsm1
-    (newRsm, lines) <- addNewPoint activePc (Point ints) rsm
-    putStrLn $ "\n\nNew line count:" ++ (show $ length lines) ++"\n\n"
+    (newRsm, lines) <- addNewPoint activePc (Point ints) (activePc, getStateFromDmap full) rsm
     endTime <- getCurrentTime
+    case mDumpStates of
+      Nothing -> return ()
+      Just file ->
+          let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates newRsm
+              pcStatePairs =
+                  concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
+          in do
+            BSL.writeFile file $
+               C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
+            hPutStrLn stderr $ "Written a new state: " ++ (show (getStateFromDmap full))
     let newRsmWithTiming = newRsm {rsmTiming = (rsmTiming rsm) + (diffUTCTime endTime startTime)}
-    putStrLn $ "Total Time in RSM so far: " ++ (show $ rsmTiming newRsmWithTiming )
-    return (newRsmWithTiming, map (\ln -> mkLine' ln) (Set.toList lines))
+    return (newRsmWithTiming, concatMap (map (\ln -> mkLine E.Ge ln)) (Set.toList lines))
     where
-      -- anyLispNameToLispRevInt :: AnyLispName -> Maybe (LispRev IntType)
-      -- relevantVars :: [AnyLispName]
-      -- relevantVars = catMaybes $ map extrVal (DMap.toList full)
-      --     where
-      --       extrVal :: DSum LispName LispUVal -> Maybe AnyLispName
-      --       extrVal (_ :=> (LispU (Singleton (BoolValueC _)))) =
-      --           Nothing
-      --       extrVal (name :=> (LispU (Singleton (IntValueC _)))) =
-      --           Just (AnyLispName name State)
-      --       extrVal _ = Nothing
+      getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
+      getStateFromDmap full =
+          map extrVal (DMap.toList full)
+          where
+            extrVal :: DSum LispName LispUVal -> Either Bool Integer
+            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
+                Left bool
+            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
+                Right int
 
-      -- relevantVarSubsets :: [Set AnyLispName]
-      -- relevantVarSubsets =
-      --     concatMap filterRelevant . Map.toList $
-      --         Map.mapWithKey (\var deps ->
-      --                             [ Set.insert var depSubset
-      --                             | depSubset <- genSubsets deps
-      --                             , (Set.size depSubset > 0)
-      --                             ]
-      --                        ) (programVarDepMap prog)
-      --     where
-      --       genSubsets set
-      --           | set == Set.empty = [Set.empty]
-      --           | otherwise =
-      --               let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
-      --               in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
-
-      --       filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
-      --       filterRelevant (_, alnSetList) =
-      --           map (Set.filter condition) alnSetList
-      --           where
-      --             condition name = name `elem` relevantVars
-
-      -- anyLispNameToLispRev :: AnyLispName -> [(LispRev IntType)]
-      -- anyLispNameToLispRev aln@(AnyLispName name _) =
-      --     case DMap.lookup name part of
-      --       Just (LispPVal' (LispP p)) ->
-      --           [ el |
-      --             el <- pints (\idx val -> (LispRev name (RevVar idx))) p
-      --           ]
-      --       _ -> []
-
-      -- relevantLispRevs =
-      --     map
-      --     (\alnSet -> Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
-      --     relevantVarSubsets
-
-      -- getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
-      -- getStateFromDmap full =
-      --     catMaybes $ map extrVal (DMap.toList full)
-      --     where
-      --       extrVal :: DSum LispName LispUVal -> Maybe (Either Bool Integer)
-      --       extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
-      --           Just $ Left bool
-      --       extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
-      --           Just $ Right int
-      --       extrVal _ = Nothing
-
---      rsm1 = addRSMState activePc ints (activePc, getStateFromDmap full) rsm
       pcs = DMap.filterWithKey (\name val -> case DMap.lookup name (programState prog) of
                                    Just (Annotation ann) -> case Map.lookup "pc" ann of
                                      Just (L.Symbol "true") -> True
