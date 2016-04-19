@@ -100,6 +100,5 @@ main = do
                                 (karrPredicates prog)
                        return (prog2 { programPredicates = preds++programPredicates prog2 }))
               else return prog2
-     hPutStrLn stderr $ show depMap
      print $ programToLisp prog3
 

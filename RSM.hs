@@ -194,15 +194,9 @@ mineStates backend relevantVarSubsets st
       | Set.size cls <= 2 = return (cls, [])
       | Set.size cls > 6 = return (Set.empty, [])
     mineClass cls = do
-      --putStrLn "entered mineState"
       withBackendExitCleanly backend $ do
         setOption (ProduceUnsatCores True)
         setOption (ProduceModels True)
-        -- let varPairs =
-        --         map Set.fromList [[var1, var2] |
-        --                           var1 <- (Set.toList vars)
-        --                          , var2 <- (Set.toList vars)
-        --                          , var1 /= var2]
         individualLines <-
             mapM
             (\vars ->
@@ -213,11 +207,10 @@ mineStates backend relevantVarSubsets st
                    res <- checkSat
                    case res of
                      Sat -> do
-                        --liftIO $ putStrLn "\n\n***found a Line***\n\n"
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
-            ) relevantVarSubsets --(vars : varPairs)
+            ) relevantVarSubsets
         case individualLines of
            [] -> return (cls, [])
            _ -> return (Set.empty, Set.toList . Set.fromList $ foldr (++) [] individualLines)
