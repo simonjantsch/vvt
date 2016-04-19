@@ -168,7 +168,7 @@ extractLine coeffs = do
 mineStates ::
     (Backend b, SMTMonad b ~ IO, Ord var, Show var)
     => IO b
-    -> [Set var]
+    -> Set (Set var)
     -> RSMState loc var
     -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
 mineStates backend relevantVarSubsets st
@@ -178,8 +178,8 @@ mineStates backend relevantVarSubsets st
                           newclasses <-
                               sequence $
                               Map.mapWithKey
-                                     (\_vars cls -> do
-                                        (newclass, nprops) <- lift $ mineClass cls
+                                     (\vars cls -> do
+                                        (newclass, nprops) <- lift $ mineClass vars cls
                                         props <- get
                                         --liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
                                         modify (nprops++)
@@ -190,13 +190,18 @@ mineStates backend relevantVarSubsets st
         return $ st { rsmLocations = nlocs }
     ) []
   where
-    mineClass cls
+    mineClass vars cls
       | Set.size cls <= 2 = return (cls, [])
       | Set.size cls > 6 = return (Set.empty, [])
-    mineClass cls = do
+    mineClass vars cls = do
       withBackendExitCleanly backend $ do
         setOption (ProduceUnsatCores True)
         setOption (ProduceModels True)
+        let varPairs =
+                map Set.fromList [[var1, var2] |
+                                  var1 <- (Set.toList vars)
+                                 , var2 <- (Set.toList vars)
+                                 , var1 /= var2]
         individualLines <-
             mapM
             (\vars ->
@@ -210,7 +215,7 @@ mineStates backend relevantVarSubsets st
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
-            ) relevantVarSubsets
+            ) (vars : varPairs) --(Set.toList (Set.map (Set.intersection vars) relevantVarSubsets))
         case individualLines of
            [] -> return (cls, [])
            _ -> return (Set.empty, Set.toList . Set.fromList $ foldr (++) [] individualLines)

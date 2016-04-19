@@ -82,8 +82,8 @@ main = do
      exitWith (ExitFailure (-1))
    Right opts -> do
      prog <- fmap parseProgram (readLispFile stdin)
-     depMap <- buildVarDependencyGraph prog
-     let progWithDepMap = prog { programVarDepMap = depMap }
+     let depMap = buildVarDependencyGraph prog
+         progWithDepMap = prog { programVarDepMap = depMap }
          lins = statesOfTypeWithDependencies IntRepr progWithDepMap
          ineqs = concat . runIdentity $ mapM (\(var, deps) -> ineqPredicates var deps) lins
          prog1 = if addIneqPredicates opts

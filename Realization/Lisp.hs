@@ -124,10 +124,10 @@ instance Eq AnyGate where
 instance Ord AnyGate where
     compare (AnyGate g1) (AnyGate g2) = defaultCompare g1 g2
 
-buildVarDependencyGraph :: LispProgram -> IO (Map AnyLispName (Set AnyLispName))
+buildVarDependencyGraph :: LispProgram -> Map AnyLispName (Set AnyLispName)
 buildVarDependencyGraph prog =
-    fmap (\(_,_,c) -> c) $
-    execStateT
+    (\(_,_,c) -> c) $
+    execState
         (mapM_ (\(k :=> v) ->
                    do depList <- collectVariableDependencies v List.nil
                       modify $ \(gateMap, _, depMap) ->
@@ -140,15 +140,14 @@ buildVarDependencyGraph prog =
       collectVariableDependencies ::
           LispVar LispExpr sz
           -> List Natural idx
-          -> StateT
+          -> SM.State
              (Map AnyGate (Set AnyLispName)
              , Set AnyLispName
              , Map AnyLispName (Set AnyLispName)
              )
-             IO
              (Set AnyLispName)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) _ =
-          return Set.empty -- $ Set.singleton (AnyLispName ln Input)
+          return Set.empty
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) _ =
           return $ Set.singleton (AnyLispName ln State)
       collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) _ =
@@ -163,9 +162,7 @@ buildVarDependencyGraph prog =
                                modify $ \(gateMap, b, c) -> (Map.insert (AnyGate ln) gateDeps gateMap, b, c)
                                return gateDeps
                         Just dependencies -> return dependencies
-                  Nothing ->
-                      do liftIO . putStrLn $ "no gate found!"
-                         return Set.empty
+                  Nothing -> return Set.empty
 
       collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) idx =
           do relevantElements <- fmap snd $ Struct.access exprs idx (\el -> return ((), el))
@@ -184,12 +181,11 @@ buildVarDependencyGraph prog =
 
       collectFromExpression ::
           LispExpr t
-          -> StateT
+          -> SM.State
              (Map AnyGate (Set AnyLispName)
              , Set AnyLispName
              , Map AnyLispName (Set AnyLispName)
              )
-             IO
              (Set AnyLispName)
       collectFromExpression (LispExpr expr) =
           do _ <- E.mapExpr
@@ -1000,7 +996,14 @@ instance TransitionRelation LispProgram where
   defaultPredicateExtractor _ = return emptyRSM
   extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = liftIO $ do
     startTime <- getCurrentTime
-    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) relevantLispRevs rsm1
+    --putStrLn $ "relevantLispRevs: " ++ (show (relevantLispRevs (rsmProgramVarDepMap rsm1)))
+    let varDepMap = buildVarDependencyGraph prog
+    putStrLn $ "relevant LispRevs: " ++ show (relevantLispRevs varDepMap)
+    (rsm2,lines) <-
+        mineStates
+        (createPipe "z3" ["-smt2","-in"])
+        (relevantLispRevs varDepMap)
+        rsm1
     endTime <- getCurrentTime
     case mDumpStates of
       Nothing -> return ()
@@ -1031,27 +1034,27 @@ instance TransitionRelation LispProgram where
                 Just (AnyLispName name State)
             extrVal _ = Nothing
 
-      relevantVarSubsets :: [Set AnyLispName]
-      relevantVarSubsets =
+      relevantVarSubsets :: Map AnyLispName (Set AnyLispName) -> [Set AnyLispName]
+      relevantVarSubsets depMap =
           concatMap filterRelevant . Map.toList $
               Map.mapWithKey (\var deps ->
                                   [ Set.insert var depSubset
                                   | depSubset <- genSubsets deps
-                                  , (Set.size depSubset > 0)
+                                  , not (null depSubset)
                                   ]
-                             ) (programVarDepMap prog)
-          where
-            genSubsets set
-                | set == Set.empty = [Set.empty]
-                | otherwise =
-                    let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
-                    in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
+                             ) depMap
+      genSubsets set
+          | set == Set.empty = [Set.empty]
+          | otherwise =
+              let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
+              in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
 
-            filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
-            filterRelevant (_, alnSetList) =
-                map (Set.filter condition) alnSetList
-                where
-                  condition name = name `elem` relevantVars
+      filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
+      filterRelevant (_, alnSetList) =
+          filter (\s -> Set.size s > 1) $
+          map (Set.filter condition) alnSetList
+              where
+                condition name = name `elem` relevantVars
 
       anyLispNameToLispRev :: AnyLispName -> [(LispRev IntType)]
       anyLispNameToLispRev aln@(AnyLispName name _) =
@@ -1062,10 +1065,13 @@ instance TransitionRelation LispProgram where
                 ]
             _ -> []
 
-      relevantLispRevs =
+      relevantLispRevs depMap =
+          Set.fromList $
+          filter (\l -> length l > 1) $
           map
-          (\alnSet -> Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
-          relevantVarSubsets
+          (\alnSet ->
+               Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
+          (relevantVarSubsets depMap)
 
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
