@@ -862,18 +862,19 @@ instance TransitionRelation LispProgram where
                           ) (programState prog))
       | expr <- programPredicates prog ]
   defaultPredicateExtractor _ = return emptyRSM
-  extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = liftIO $ do
-    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) rsm1
-    case mDumpStates of
-      Nothing -> return ()
-      Just file ->
-          let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm2
-              pcStatePairs =
-                  concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
-          in BSL.writeFile file $
-             C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
-    return (rsm2,concat $ fmap (\ln -> [mkLine E.Ge ln
-                                       ,mkLine E.Gt ln]) lines)
+  extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = return (emptyRSM, [])
+      -- liftIO $ do
+    -- (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) rsm1
+    -- case mDumpStates of
+    --   Nothing -> return ()
+    --   Just file ->
+    --       let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm2
+    --           pcStatePairs =
+    --               concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
+    --       in BSL.writeFile file $
+    --          C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
+    -- return (rsm2,concat $ fmap (\ln -> [mkLine E.Ge ln
+    --                                    ,mkLine E.Gt ln]) lines)
     where
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
