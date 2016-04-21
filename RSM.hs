@@ -8,11 +8,8 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Language.SMTLib2
-import Language.SMTLib2.Internals.Backend (SMTMonad)
-import qualified Language.SMTLib2.Internals.Interface as I
-import Language.SMTLib2.Internals.Embed
-import "mtl" Control.Monad.State (runStateT,modify, get)
-import "mtl" Control.Monad.Trans (lift, MonadIO)
+import "mtl" Control.Monad.State (runStateT,modify)
+import "mtl" Control.Monad.Trans (lift)
 import Prelude hiding (mapM,sequence)
 import Data.Aeson as A
 import Data.Traversable (mapM,sequence)
@@ -79,28 +76,18 @@ createCoeffs instrs = do
                   }
 
 notAllZero :: Backend b => Coeffs b var -> SMT b (Expr b BoolType)
-notAllZero coeffs = do
-  args <- sequence [ I.constant (0::Integer) >>=
-                     embed.(c :==:) >>=
-                     embed.Not
-                   | c <- Map.elems (coeffsVar coeffs) ]
-  embed $ OrLst args
+notAllZero coeffs = or' [ not' (c .==. cint 0)
+                        | c <- Map.elems (coeffsVar coeffs) ]
 
 createLine :: (Backend b,Ord var, MonadIO (SMTMonad b))
               => Coeffs b var -> Map var Integer -> SMT b (Expr b BoolType)
 createLine coeffs vars = do
-  lhs <- case Map.elems $ Map.intersectionWith (\c i -> do
-                                                   i' <- constant (IntValueC i)
-                                                   embed $ c I.:*: i'
+  lhs <- case Map.elems $ Map.intersectionWith (\c i -> c .*. cint i
                                                ) (coeffsVar coeffs) vars of
          [x] -> x
-         xs -> do
-           rxs <- sequence xs
-           embed $ PlusLst rxs
+         xs -> plus xs
   let rhs = coeffsConst coeffs
-      line = lhs :==: rhs
-  --liftIO $ putStrLn (show line)
-  embed $ line
+  lhs .==. rhs
 
 createLines :: (Backend b,Ord var, MonadIO (SMTMonad b)) => Coeffs b var -> Set (Map var Integer)
                -> SMT b (Map (ClauseId b) (Map var Integer))
@@ -146,11 +133,11 @@ instance (Show var,Ord var) => Composite (RSMVars var) where
   accessComposite (RSMVar instr) (RSMVars mp) = mp Map.! instr
   eqComposite (RSMVars mp1) (RSMVars mp2) = do
     res <- sequence $ Map.elems $ Map.intersectionWith
-           (\e1 e2 -> embed $ e1 :==: e2) mp1 mp2
+           (\e1 e2 -> e1 .==. e2) mp1 mp2
     case res of
-      [] -> embedConst (BoolValueC True)
+      [] -> true
       [e] -> return e
-      _ -> embed $ AndLst res
+      _ -> and' res
   revType _ _ (RSMVar _) = IntRepr
 
 instance GetType (RSMVar v) where
@@ -215,7 +202,7 @@ mineStates backend relevantVarSubsets st
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
-            ) (vars : varPairs) --(Set.toList (Set.map (Set.intersection vars) relevantVarSubsets))
+            ) (Set.toList (Set.map (Set.intersection vars) relevantVarSubsets)) --(vars : varPairs) 
         case individualLines of
            [] -> return (cls, [])
            _ -> return (Set.empty, Set.toList . Set.fromList $ foldr (++) [] individualLines)
