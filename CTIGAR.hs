@@ -19,7 +19,7 @@ import Language.SMTLib2.Pipe (createPipe)
 import Language.SMTLib2.Debug
 import Language.SMTLib2.Timing
 import Language.SMTLib2.ModulusEmulator
-import Language.SMTLib2.Internals.Backend (SMTMonad,LVar)
+import Language.SMTLib2.Internals.Backend (LVar)
 import qualified Language.SMTLib2.Internals.Backend as B
 import Language.SMTLib2.Internals.Interface
 import qualified Language.SMTLib2.Internals.Expression as E
@@ -1238,13 +1238,15 @@ interpolateState j s inp = do
         Arith op (x ::: Nil)
           -> cleanInterpolant mp x
         Ord op x@(getType -> RealRepr) y -> do
-          nx <- removeToReal x
+          rx <- cleanInterpolant mp x
+          ry <- cleanInterpolant mp y
+          nx <- removeToReal rx
           case nx of
-            Nothing -> return e
+            Nothing -> embed (Ord op rx ry)
             Just x' -> do
-              ny <- removeToReal y
+              ny <- removeToReal ry
               case ny of
-                Nothing -> return e
+                Nothing -> embed (Ord op rx ry)
                 Just y' -> embed (Ord op x' y')
         E.App fun args -> do
           nargs <- List.mapM (cleanInterpolant mp) args
