@@ -5,9 +5,11 @@ import Args
 
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Maybe(catMaybes)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Language.SMTLib2
+import Control.Monad.IO.Class(liftIO)
 import "mtl" Control.Monad.State (runStateT,modify)
 import "mtl" Control.Monad.Trans (lift)
 import Prelude hiding (mapM,sequence)
@@ -19,6 +21,8 @@ import qualified Data.Text as T
 import Data.Time.Clock
 
 import GHC.Generics as G
+
+import Safe (headMay)
 
 newtype CollectedStates =
     CollectedStates
@@ -37,6 +41,9 @@ data RSMState loc var = RSMState { rsmLocations :: Map loc (RSMLoc var)
 data RSMLoc var = RSMLoc { rsmClasses :: Map (Set var) (Set (Map var Integer))
                          }
 
+instance Show var => Show (RSMLoc var) where
+    show loc = show (rsmClasses loc)
+
 data Coeffs b var = Coeffs { coeffsVar :: Map var (Expr b IntType)
                            , coeffsConst :: Expr b IntType
                            }
@@ -47,7 +54,8 @@ emptyRSM = RSMState Map.empty (CollectedStates Map.empty) 0 Set.empty
 addRSMState :: (Ord loc,Ord var) => loc -> Map var Integer -> (Set T.Text, [Either Bool Integer])
                -> RSMState loc var -> RSMState loc var
 addRSMState loc instrs (pc, concr_state) st
-  = st { rsmLocations = Map.insertWith
+  = st { rsmLocations = Map.map (\loc -> loc {rsmClasses = mergeClassesWithOverlappingVars 5 (rsmClasses loc)}) $
+                        Map.insertWith
                         joinLoc
                         loc
                         (RSMLoc { rsmClasses = Map.singleton (Map.keysSet instrs) (Set.singleton instrs)})
@@ -63,6 +71,28 @@ addRSMState loc instrs (pc, concr_state) st
     joinLoc :: Ord var => RSMLoc var -> RSMLoc var -> RSMLoc var
     joinLoc l1 l2 = RSMLoc { rsmClasses = Map.unionWith Set.union (rsmClasses l1) (rsmClasses l2)
                            }
+mergeClassesWithOverlappingVars ::
+    Ord var =>
+    Int
+ -> Map (Set var) (Set (Map var Integer))
+ -> Map (Set var) (Set (Map var Integer))
+mergeClassesWithOverlappingVars count classes =
+    case headMay (Map.assocs classes) of
+      Nothing -> Map.empty
+      Just (varSet, states) ->
+          let (newClassStates, keysMerged) =
+                  Map.foldrWithKey (\newVarSet newStates (newClassStates, keysMerged) ->
+                                        case Set.size (Set.intersection varSet newVarSet) >= count of
+                                          True -> (Set.union newStates newClassStates, newVarSet : keysMerged)
+                                          False -> (newClassStates, keysMerged)
+                                   ) (states, [varSet]) (Map.delete varSet classes)
+              newKey = foldr Set.union Set.empty keysMerged
+              leftOver =
+                  Map.difference
+                  classes
+                  (Map.fromList . catMaybes $ map (\k -> fmap ((,) k) (Map.lookup k classes)) keysMerged)
+          in Map.insert newKey newClassStates (mergeClassesWithOverlappingVars count leftOver)
+
 
 createCoeffs :: (Backend b,Ord var) => Set var -> SMT b (Coeffs b var)
 createCoeffs instrs = do
@@ -79,7 +109,7 @@ notAllZero :: Backend b => Coeffs b var -> SMT b (Expr b BoolType)
 notAllZero coeffs = or' [ not' (c .==. cint 0)
                         | c <- Map.elems (coeffsVar coeffs) ]
 
-createLine :: (Backend b,Ord var, MonadIO (SMTMonad b))
+createLine :: (Backend b,Ord var)
               => Coeffs b var -> Map var Integer -> SMT b (Expr b BoolType)
 createLine coeffs vars = do
   lhs <- case Map.elems $ Map.intersectionWith (\c i -> c .*. cint i
@@ -89,14 +119,21 @@ createLine coeffs vars = do
   let rhs = coeffsConst coeffs
   lhs .==. rhs
 
-createLines :: (Backend b,Ord var, MonadIO (SMTMonad b)) => Coeffs b var -> Set (Map var Integer)
+createLines :: (Backend b,Ord var) => Coeffs b var -> Set (Map var Integer)
                -> SMT b (Map (ClauseId b) (Map var Integer))
 createLines coeffs points = do
-  res <- mapM (\point -> do
-                  cid <- createLine coeffs point >>= assertId
-                  return (cid,point)
+  res <- mapM
+         (\point ->
+              let pointVarsAndCoeffsAreDisjoint =
+                      null $
+                      Set.intersection (Map.keysSet $ coeffsVar coeffs) (Map.keysSet point)
+              in case pointVarsAndCoeffsAreDisjoint  of
+                   True -> return Nothing
+                   False -> do
+                     cid <- createLine coeffs point >>= assertId
+                     return $ Just (cid,point)
               ) (Set.toList points)
-  return $ Map.fromList res
+  return $ Map.fromList $ catMaybes res
 
 newtype RSMVars var e = RSMVars (Map var (e IntType))
 
@@ -155,10 +192,9 @@ extractLine coeffs = do
 mineStates ::
     (Backend b, SMTMonad b ~ IO, Ord var, Show var)
     => IO b
-    -> Set (Set var)
     -> RSMState loc var
     -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
-mineStates backend relevantVarSubsets st
+mineStates backend st
   = runStateT
     (do
         nlocs <- mapM (\loc -> do
@@ -167,8 +203,6 @@ mineStates backend relevantVarSubsets st
                               Map.mapWithKey
                                      (\vars cls -> do
                                         (newclass, nprops) <- lift $ mineClass vars cls
-                                        props <- get
-                                        --liftIO $ putStrLn $ "##\n\n" ++ (show props) ++ "\n\n##"
                                         modify (nprops++)
                                         return newclass
                                      )(rsmClasses loc)
@@ -189,6 +223,13 @@ mineStates backend relevantVarSubsets st
                                   var1 <- (Set.toList vars)
                                  , var2 <- (Set.toList vars)
                                  , var1 /= var2]
+            varTriples =
+                map Set.fromList [[var1, var2, var3] |
+                                  var1 <- (Set.toList vars)
+                                 , var2 <- (Set.toList vars)
+                                 , var3 <- (Set.toList vars)
+                                 , var1 /= var2
+                                 , var2 /= var3]
         individualLines <-
             mapM
             (\vars ->
@@ -202,7 +243,7 @@ mineStates backend relevantVarSubsets st
                         line <- extractLine coeffs
                         return [line]
                      Unsat -> return []
-            ) (Set.toList (Set.map (Set.intersection vars) relevantVarSubsets)) --(vars : varPairs) 
+            )(vars : varPairs)
         case individualLines of
            [] -> return (cls, [])
            _ -> return (Set.empty, Set.toList . Set.fromList $ foldr (++) [] individualLines)

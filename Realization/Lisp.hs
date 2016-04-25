@@ -995,13 +995,10 @@ instance TransitionRelation LispProgram where
   defaultPredicateExtractor _ = return emptyRSM
   extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = liftIO $ do
     startTime <- getCurrentTime
-    --putStrLn $ "relevantLispRevs: " ++ (show (relevantLispRevs (rsmProgramVarDepMap rsm1)))
-    let varDepMap = buildVarDependencyGraph prog
-    putStrLn $ "relevant LispRevs: " ++ show (relevantLispRevs varDepMap)
+    putStrLn $ show (rsmLocations rsm1)
     (rsm2,lines) <-
         mineStates
         (createPipe "z3" ["-smt2","-in"])
-        (relevantLispRevs varDepMap)
         rsm1
     endTime <- getCurrentTime
     case mDumpStates of
