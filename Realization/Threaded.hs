@@ -2107,37 +2107,42 @@ outputValues = do
 computeRStep :: LLVMRealization (Map (Maybe (Ptr CallInst)) (LLVMExpr BoolType))
 computeRStep = do
   st <- get
-  let allThreads = Nothing:(fmap Just $ Map.keys $ threadStateDesc $ stateAnnotation st)
-  fmap Map.fromList $
-    sequence [ do
-                 let thisStep = RInput $ case th of
-                       Nothing -> MainInput Step
-                       Just th' -> ThreadInput' th' Step
-                     thisRunning = case th of
-                       Nothing -> []
-                       Just th' -> [RState $ ThreadActivation th']
-                     otherSteps = [ RInput $ case th' of
-                                    Nothing -> MainInput Step
-                                    Just th'' -> ThreadInput' th'' Step
-                                  | th' <- allThreads
-                                  , th'/=th ]
-                     thisIntYields = [ RState $ case th of
-                                        Nothing -> MainState $ LatchBlock blk sblk
-                                        Just th'' -> ThreadState' th'' $ LatchBlock blk sblk
-                                     | (th',blk,sblk) <- Map.keys $ internalYieldEdges st
-                                     , th'==th ]
-                     otherIntYields = [ RState $ case th' of
-                                        Nothing -> MainState $ LatchBlock blk sblk
-                                        Just th'' -> ThreadState' th'' $ LatchBlock blk sblk
-                                      | (th',blk,sblk) <- Map.keys $ internalYieldEdges st
-                                      , th'/=th]
-                 notOthers <- mapM (\x -> not' x) otherSteps
-                 notOtherIntYield <- mapM (\x -> not' x) otherIntYields
-                 canStep <- and' (thisStep:thisRunning++notOthers++notOtherIntYield)
-                 mustStep <- or' (canStep:thisIntYields)
-                 rstep' <- define ("rstep"++(if n==0 then "" else show n)) mustStep
-                 return (th,rstep')
-             | (th,n) <- zip allThreads [0..] ]
+  case Map.keys $ threadStateDesc $ stateAnnotation st of
+    [] -> do
+      step <- true
+      return $ Map.singleton Nothing step
+    ths -> do
+      let allThreads = Nothing:(fmap Just ths)
+      fmap Map.fromList $
+        sequence [ do
+                     let thisStep = RInput $ case th of
+                           Nothing -> MainInput Step
+                           Just th' -> ThreadInput' th' Step
+                         thisRunning = case th of
+                           Nothing -> []
+                           Just th' -> [RState $ ThreadActivation th']
+                         otherSteps = [ RInput $ case th' of
+                                          Nothing -> MainInput Step
+                                          Just th'' -> ThreadInput' th'' Step
+                                      | th' <- allThreads
+                                      , th'/=th ]
+                         thisIntYields = [ RState $ case th of
+                                             Nothing -> MainState $ LatchBlock blk sblk
+                                             Just th'' -> ThreadState' th'' $ LatchBlock blk sblk
+                                         | (th',blk,sblk) <- Map.keys $ internalYieldEdges st
+                                         , th'==th ]
+                         otherIntYields = [ RState $ case th' of
+                                              Nothing -> MainState $ LatchBlock blk sblk
+                                              Just th'' -> ThreadState' th'' $ LatchBlock blk sblk
+                                          | (th',blk,sblk) <- Map.keys $ internalYieldEdges st
+                                          , th'/=th]
+                     notOthers <- mapM (\x -> not' x) otherSteps
+                     notOtherIntYield <- mapM (\x -> not' x) otherIntYields
+                     canStep <- and' (thisStep:thisRunning++notOthers++notOtherIntYield)
+                     mustStep <- or' (canStep:thisIntYields)
+                     rstep' <- define ("rstep"++(if n==0 then "" else show n)) mustStep
+                     return (th,rstep')
+                 | (th,n) <- zip allThreads [0..] ]
 
 computeTransitionRelation :: LLVMRealization LLVMTransRel
 computeTransitionRelation = do
@@ -2210,31 +2215,31 @@ computeTransitionRelation = do
                                       Just th' -> ThreadState' th' tRev
                                 in return $ RState pRev
                      ) tp
-              new <- case Map.lookup (th,instr) (instructions st) of
-                Just (act,val) -> do
-                  alwaysDefined <- foldlM (\allEdgesDefine edge
-                                           -> case Map.lookup (th,instr) (edgeValues edge) of
-                                           Just AlwaysDefined -> return allEdgesDefine
-                                           Just SometimesDefined -> return False
-                                           _ -> return False
-                                          ) True (edges st)
-                  cond <- rstep .&. act
-                  symITE cond (symbolicValue val) old
-                  {-if alwaysDefined
-                    then symITE rstep (symbolicValue val) old
-                    else do
+              alwaysDefined <- foldlM (\allEdgesDefine edge
+                                       -> case Map.lookup (th,instr) (edgeValues edge) of
+                                          Just AlwaysDefined -> return allEdgesDefine
+                                          Just SometimesDefined -> return False
+                                          _ -> return False
+                                      ) True (edges st)
+              let phis = [ (phiVal,edgeActivation cond)
+                         | edge <- Map.elems (edges st)
+                         , cond <- edgeConditions edge
+                         , phiVal <- case Map.lookup (th,instr)
+                                          (edgePhis cond) of
+                             Just rval -> [symbolicValue rval]
+                             Nothing -> [] ]
+              case phis of
+                [] -> case Map.lookup (th,instr) (instructions st) of
+                  Just (act,val) -> if alwaysDefined
+                                    then symITE rstep (symbolicValue val) old
+                                    else do
                     cond <- rstep .&. act
-                    symITE cond (symbolicValue val) old-}
-                Nothing -> return old
-              ctrue <- true
-              symITEs $ [ (phiVal,edgeActivation cond)
-                        | edge <- Map.elems (edges st)
-                        , cond <- edgeConditions edge
-                        , phiVal <- case Map.lookup (th,instr)
-                                         (edgePhis cond) of
-                            Just rval -> [symbolicValue rval]
-                            Nothing -> [] ]++
-                [(new,ctrue)]
+                    symITE cond (symbolicValue val) old
+                _ -> if alwaysDefined
+                     then symITEs phis
+                     else do
+                  ctrue <- true
+                  symITEs (phis++[(old,ctrue)])
           ) (latchValueDesc desc)
       nxtThread th desc = do
         let Just rstep = Map.lookup th rsteps
