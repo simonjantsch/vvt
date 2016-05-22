@@ -113,7 +113,7 @@ performAction (Encode fn,opts) = do
                   ,progSimplify
                   ,progPredicates opts
                   ,progPretty]
-  ph <- execPipe inp stdout pipe
+  ph <- execPipe inp outp pipe
   waitForProcess ph
   return ()
 performAction (ShowLLVM fn,opts) = do
