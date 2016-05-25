@@ -153,7 +153,8 @@ runBench conf = do
                                    case bc_optimizeTr conf of
                                      True ->
                                          vvtBinary
-                                         <> " encode -o " <> dest <> " "
+                                         <> " encode -o " <> dest
+                                         <> " --ineq "
                                          <> benchAsTxt
                                          <> " > /dev/null" <> " 2>&1"
                                      False ->
@@ -162,7 +163,7 @@ runBench conf = do
                                          <> benchAsTxt
                                          <> " | " <> vvtenc
                                          <> " 2>/dev/null "
-                                         <> " | " <> vvtpreds <> " -i"
+                                         <> " | " <> vvtpreds <> " --ineq"
                                          <> " | " <> vvtpp
                                          <> " 1> " <> dest
                            in do
