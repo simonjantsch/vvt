@@ -15,7 +15,6 @@ import Language.SMTLib2.Internals.Type.Struct (Struct(..),Tree)
 import qualified Language.SMTLib2.Internals.Type.Struct as Struct
 import Language.SMTLib2.Internals.Type
 import Language.SMTLib2.Internals.Embed
-import Language.SMTLib2.Internals.Interface as I
 import qualified Language.SMTLib2.Internals.Expression as E
 import qualified Data.ByteString as BS
 import qualified Data.Csv as C
@@ -92,7 +91,7 @@ lispVarType (LispConstr val) = lispValueType val
 lispVarType (LispITE _ v _) = lispVarType v
 
 data LispExpr (t::Type) where
-  LispExpr :: E.Expression NoRef NoRef NoRef NoRef NoRef NoRef NoRef LispExpr t
+  LispExpr :: E.Expression NoRef NoRef NoRef NoRef NoRef LispExpr t
            -> LispExpr t
   LispRef :: LispVar LispExpr '(sz,tps)
           -> List Natural idx
@@ -971,9 +970,9 @@ instance TransitionRelation LispProgram where
                     (error "Realization.Lisp: invariant references gates.")
                    ) (programInvariant prog)
     case invars of
-      [] -> I.constant True
+      [] -> true
       [x] -> return x
-      xs -> embed $ AndLst xs
+      xs -> and' xs
   startingProgress _ = LispState DMap.empty
   declareAssumptions mkGate prog st inp gts
     = runStateT (mapM (relativize st inp (declareGate mkGate prog st inp)
@@ -1021,9 +1020,9 @@ instance TransitionRelation LispProgram where
           map extrVal (DMap.toList full)
           where
             extrVal :: DSum LispName LispUVal -> Either Bool Integer
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
+            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValue bool)))) =
                 Left bool
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
+            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValue int)))) =
                 Right int
 
       pcs = DMap.filterWithKey (\name val -> case DMap.lookup name (programState prog) of
@@ -1034,7 +1033,7 @@ instance TransitionRelation LispProgram where
       activePc :: Set T.Text
       activePc = Set.fromList [ name
                               | (LispName _ _ name)
-                                :=> (LispU (Singleton (BoolValueC True))) <- DMap.toList pcs ]
+                                :=> (LispU (Singleton (BoolValue True))) <- DMap.toList pcs ]
       ints :: Map (LispRev IntType) Integer
       ints = Map.fromList
              [ el --(LispRev name (RevVar idx),val)
@@ -1047,7 +1046,7 @@ instance TransitionRelation LispProgram where
             -> [a]
       pints f = runIdentity . Struct.flattenIndex
                 (\idx pval -> case pval of
-                  PValue (IntValueC v) -> return [f idx v]
+                  PValue (IntValue v) -> return [f idx v]
                   _ -> return [])
                 (return.concat)
 
@@ -1068,14 +1067,14 @@ instance TransitionRelation LispProgram where
       mkLine op (c,coeff)
         = mkCompExpr
           (\st -> do
-              c' <- embedConst (IntValueC c)
+              c' <- cint c
               sum <- mapM (\(rev,val) -> do
                               let var = accessComposite rev st
                               case val of
                                 1 -> return var
                                 -1 -> embed $ Neg var
                                 _ -> do
-                                  rval <- embedConst (IntValueC val)
+                                  rval <- cint val
                                   embed $ rval :*: var
                           ) coeff
               case sum of
@@ -1145,7 +1144,7 @@ relativize :: (Embed m e,GetType e)
            -> LispExpr t
            -> m (e t)
 relativize st inp gts (LispExpr e) = do
-  e' <- E.mapExpr err err err err err err err
+  e' <- E.mapExpr err err err err err
         (relativize st inp gts) e
   embed e'
   where
@@ -1172,11 +1171,11 @@ relativize st inp gts e = error $ "Realization.Lisp.relativize: Cannot relativiz
 
 oneOf :: Embed m e
       => [e BoolType] -> m (e BoolType)
-oneOf [] = I.constant True
+oneOf [] = true
 oneOf [x] = return x
 oneOf xs = do
   disj <- oneOf' [] xs
-  embed $ OrLst disj
+  or' disj
   where
     oneOf' :: Embed m e
            => [e BoolType] -> [e BoolType] -> m [e BoolType]
@@ -1190,19 +1189,19 @@ oneOf xs = do
 
 atMostOneOf :: Embed m e
             => [e BoolType] -> m (e BoolType)
-atMostOneOf [] = I.constant True
-atMostOneOf [x] = I.constant True
-atMostOneOf xs = oneOf' [] xs >>= embed.OrLst
+atMostOneOf [] = true
+atMostOneOf [x] = true
+atMostOneOf xs = oneOf' [] xs >>= or'
   where
     oneOf' :: Embed m e
            => [e BoolType] -> [e BoolType] -> m [e BoolType]
     oneOf' xs [] = do
-      negs <- mapM (embed.Not) xs
-      conj <- embed $ AndLst negs
+      negs <- mapM not' xs
+      conj <- and' negs
       return [conj]
     oneOf' xs (y:ys) = do
-      negs <- mapM (embed.Not) (xs++ys)
-      trm <- embed $ AndLst (y:negs)
+      negs <- mapM not' (xs++ys)
+      trm <- and' (y:negs)
       rest <- oneOf' (y:xs) ys
       return (trm:rest)
 
@@ -1328,7 +1327,7 @@ instance LiftComp LispState where
                  ) lst
     return $ LispConcr $ DMap.fromAscList nlst
     where
-      unlift' :: (Embed m e,GetType e) => (forall t. e t -> m (ConcreteValue t))
+      unlift' :: (Embed m e,GetType e) => (forall t. e t -> m (Value t))
               -> LispValue '(lvl,tps) e -> m (LispUVal '(lvl,tps))
       unlift' f lv@(LispValue sz val) = case sz of
         Size Nil Nil -> do
@@ -1387,12 +1386,6 @@ instance GetType NoRef where
 
 instance GetFunType NoRef where
   getFunType _ = error "getFunType called for NoRef."
-
-instance GetConType NoRef where
-  getConType _ = error "getConType called for NoRef."
-
-instance GetFieldType NoRef where
-  getFieldType _ = error "getFieldType called for NoRef."
 
 instance (GetType e,GEq e) => GEq (LispVar e) where
   geq (NamedVar n1 cat1) (NamedVar n2 cat2)
@@ -1458,29 +1451,17 @@ instance Embed Identity LispExpr where
   type EmVar Identity LispExpr = NoRef
   type EmQVar Identity LispExpr = NoRef
   type EmFun Identity LispExpr = NoRef
-  type EmConstr Identity LispExpr = NoRef
-  type EmField Identity LispExpr = NoRef
   type EmFunArg Identity LispExpr = NoRef
   type EmLVar Identity LispExpr = NoRef
   embed = return.LispExpr
   embedQuantifier = error "LispExpr doesn't embed quantifier."
-  embedConstrTest = error "LispExpr doesn't embed datatypes."
-  embedGetField = error "LispExpr doesn't embed datatypes."
-  embedConst c = do
-    v <- valueFromConcrete (error "LispExpr doesn't embed datatypes.") c
-    return (LispExpr (E.Const v))
 
 instance Embed m e => Embed (StateT (LispState e) m) e where
   type EmVar (StateT (LispState e) m) e = EmVar m e
   type EmQVar (StateT (LispState e) m) e = EmQVar m e
   type EmFun (StateT (LispState e) m) e = EmFun m e
-  type EmConstr (StateT (LispState e) m) e = EmConstr m e
-  type EmField (StateT (LispState e) m) e = EmField m e
   type EmFunArg (StateT (LispState e) m) e = EmFunArg m e
   type EmLVar (StateT (LispState e) m) e = EmLVar m e
   embed = lift . embed
   embedQuantifier q tps f = lift (embedQuantifier q tps f)
-  embedConstrTest name dt e = lift (embedConstrTest name dt e)
-  embedGetField name fname dt pr e = lift (embedGetField name fname dt pr e)
-  embedConst = lift . embedConst
   embedTypeOf = lift . embedTypeOf
