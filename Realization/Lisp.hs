@@ -192,8 +192,6 @@ buildVarDependencyGraph prog =
                   return
                   return
                   return
-                  return
-                  return
                   (\expr -> do subDeps <- collectFromExpression expr
                                modify $ \(a, b, c) -> (a, Set.union subDeps b, c)
                                return expr
@@ -1023,9 +1021,9 @@ instance TransitionRelation LispProgram where
       relevantVars = catMaybes $ map extrVal (DMap.toList full)
           where
             extrVal :: DSum LispName LispUVal -> Maybe AnyLispName
-            extrVal (_ :=> (LispU (Singleton (BoolValueC _)))) =
+            extrVal (_ :=> (LispU (Singleton (BoolValue _)))) =
                 Nothing
-            extrVal (name :=> (LispU (Singleton (IntValueC _)))) =
+            extrVal (name :=> (LispU (Singleton (IntValue _)))) =
                 Just (AnyLispName name State)
             extrVal _ = Nothing
 
@@ -1073,9 +1071,9 @@ instance TransitionRelation LispProgram where
           catMaybes $ map extrVal (DMap.toList full)
           where
             extrVal :: DSum LispName LispUVal -> Maybe (Either Bool Integer)
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValueC bool)))) =
+            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValue bool)))) =
                 Just $ Left bool
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValueC int)))) =
+            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValue int)))) =
                 Just $ Right int
             extrVal _ = Nothing
 
