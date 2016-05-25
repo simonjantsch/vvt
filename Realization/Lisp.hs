@@ -24,7 +24,6 @@ import Data.Dependent.Sum
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Map (Map)
-import Data.Maybe(catMaybes)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -32,13 +31,11 @@ import qualified Data.Text as T
 import Data.Typeable
 import qualified Data.AttoLisp as L
 import qualified Data.Attoparsec.Number as L
-import System.IO (Handle)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.UTF8 as BSL
 import Data.Attoparsec
 import Control.Exception
 import Control.Monad.Trans.Except
-import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.State.Strict as SM
 import Control.Monad.Trans
 import Data.Functor.Identity
@@ -193,8 +190,6 @@ buildVarDependencyGraph prog =
              (Set AnyLispName)
       collectFromExpression (LispExpr expr) =
           do _ <- E.mapExpr
-                  return
-                  return
                   return
                   return
                   return
