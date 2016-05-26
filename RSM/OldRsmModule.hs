@@ -1,7 +1,10 @@
 {-# LANGUAGE PackageImports,FlexibleContexts, DeriveGeneric #-}
-module RSM where
-
-import Args
+module RSM.OldRsmModule
+    ( emptyRSM1
+    , RSM1State(..)
+    ,runRsm1
+    )
+where
 
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -12,23 +15,8 @@ import "mtl" Control.Monad.State (runStateT,modify)
 import "mtl" Control.Monad.Trans (lift)
 import Prelude hiding (mapM,sequence)
 import Data.Traversable (mapM,sequence)
-import Data.GADT.Show
-import Data.GADT.Compare
-import qualified Data.Text as T
 
-import GHC.Generics as G
-import Data.Aeson as A
-
-newtype CollectedStates =
-    CollectedStates
-    { unpackCollectedStates :: Map T.Text [[Either Bool Integer]] }
-    deriving G.Generic
-
-instance A.ToJSON CollectedStates
-
-data RSMState loc var = RSMState { rsmLocations :: Map loc (RSMLoc var)
-                                 , rsmStates :: CollectedStates
-                                 }
+data RSM1State loc var = RSM1State { rsmLocations :: Map loc (RSMLoc var) }
 
 data RSMLoc var = RSMLoc { rsmClasses :: Map (Set var) (Set (Map var Integer))
                          }
@@ -37,23 +25,22 @@ data Coeffs b var = Coeffs { coeffsVar :: Map var (Expr b IntType)
                            , coeffsConst :: Expr b IntType
                            }
 
-emptyRSM :: RSMState loc var
-emptyRSM = RSMState Map.empty (CollectedStates Map.empty)
+emptyRSM1 :: RSM1State loc var
+emptyRSM1 = RSM1State Map.empty
 
-addRSMState :: (Ord loc,Ord var) => loc -> Map var Integer -> (Set T.Text, [Either Bool Integer])
-               -> RSMState loc var -> RSMState loc var
-addRSMState loc instrs (pc, concr_state) st
-  = st { rsmLocations = Map.insertWith
-                        joinLoc
-                        loc
-                        (RSMLoc { rsmClasses = Map.singleton (Map.keysSet instrs) (Set.singleton instrs)})
-                        (rsmLocations st)
-       , rsmStates = CollectedStates $
-                     Map.insertWithKey
-                     (\_ new_val old_val -> ((head new_val) : old_val))
-                     (head (Set.toList pc))
-                     [concr_state]
-                     (unpackCollectedStates $ rsmStates st)
+addRSMState ::
+    (Ord loc,Ord var)
+    => loc
+    -> Map var Integer
+    -> RSM1State loc var
+    -> RSM1State loc var
+addRSMState loc instrs st
+  = st { rsmLocations =
+             Map.insertWith
+                joinLoc
+                loc
+                (RSMLoc { rsmClasses = Map.singleton (Map.keysSet instrs) (Set.singleton instrs)})
+                (rsmLocations st)
        }
   where
     joinLoc :: Ord var => RSMLoc var -> RSMLoc var -> RSMLoc var
@@ -93,50 +80,50 @@ createLines coeffs points = do
               ) (Set.toList points)
   return $ Map.fromList res
 
-newtype RSMVars var e = RSMVars (Map var (e IntType))
+-- newtype RSMVars var e = RSMVars (Map var (e IntType))
 
-data RSMVar :: * -> Type -> * where
-  RSMVar :: var -> RSMVar var IntType
+-- data RSMVar :: * -> Type -> * where
+--   RSMVar :: var -> RSMVar var IntType
 
-deriving instance Show var => Show (RSMVar var tp)
+-- deriving instance Show var => Show (RSMVar var tp)
 
-instance Show var => GShow (RSMVar var) where
-  gshowsPrec = showsPrec
+-- instance Show var => GShow (RSMVar var) where
+--   gshowsPrec = showsPrec
 
-instance Eq var => GEq (RSMVar var) where
-  geq (RSMVar v1) (RSMVar v2) = if v1==v2
-                                then Just Refl
-                                else Nothing
+-- instance Eq var => GEq (RSMVar var) where
+--   geq (RSMVar v1) (RSMVar v2) = if v1==v2
+--                                 then Just Refl
+--                                 else Nothing
 
-instance Ord var => GCompare (RSMVar var) where
-  gcompare (RSMVar v1) (RSMVar v2) = case compare v1 v2 of
-    EQ -> GEQ
-    LT -> GLT
-    GT -> GGT
+-- instance Ord var => GCompare (RSMVar var) where
+--   gcompare (RSMVar v1) (RSMVar v2) = case compare v1 v2 of
+--     EQ -> GEQ
+--     LT -> GLT
+--     GT -> GGT
 
-instance (Show var,Ord var) => Composite (RSMVars var) where
-  type CompDescr (RSMVars var) = Map var ()
-  type RevComp (RSMVars var) = RSMVar var
-  compositeType mp = RSMVars (fmap (const IntRepr) mp)
-  foldExprs f (RSMVars mp) = do
-    mp' <- sequence $ Map.mapWithKey
-           (\var -> f (RSMVar var)) mp
-    return (RSMVars mp')
-  createComposite f mp = do
-    mp' <- sequence $ Map.mapWithKey (\instr _ -> f IntRepr (RSMVar instr)) mp
-    return (RSMVars mp')
-  accessComposite (RSMVar instr) (RSMVars mp) = mp Map.! instr
-  eqComposite (RSMVars mp1) (RSMVars mp2) = do
-    res <- sequence $ Map.elems $ Map.intersectionWith
-           (\e1 e2 -> e1 .==. e2) mp1 mp2
-    case res of
-      [] -> true
-      [e] -> return e
-      _ -> and' res
-  revType _ _ (RSMVar _) = IntRepr
+-- instance (Show var,Ord var) => Composite (RSMVars var) where
+--   type CompDescr (RSMVars var) = Map var ()
+--   type RevComp (RSMVars var) = RSMVar var
+--   compositeType mp = RSMVars (fmap (const IntRepr) mp)
+--   foldExprs f (RSMVars mp) = do
+--     mp' <- sequence $ Map.mapWithKey
+--            (\var -> f (RSMVar var)) mp
+--     return (RSMVars mp')
+--   createComposite f mp = do
+--     mp' <- sequence $ Map.mapWithKey (\instr _ -> f IntRepr (RSMVar instr)) mp
+--     return (RSMVars mp')
+--   accessComposite (RSMVar instr) (RSMVars mp) = mp Map.! instr
+--   eqComposite (RSMVars mp1) (RSMVars mp2) = do
+--     res <- sequence $ Map.elems $ Map.intersectionWith
+--            (\e1 e2 -> e1 .==. e2) mp1 mp2
+--     case res of
+--       [] -> true
+--       [e] -> return e
+--       _ -> and' res
+--   revType _ _ (RSMVar _) = IntRepr
 
-instance GetType (RSMVar v) where
-  getType (RSMVar _) = IntRepr
+-- instance GetType (RSMVar v) where
+--   getType (RSMVar _) = IntRepr
 
 extractLine :: (Backend b,Ord var) => Coeffs b var
             -> SMT b (Integer,[(var,Integer)])
@@ -147,8 +134,8 @@ extractLine coeffs = do
                  | (var,IntValue val) <- Map.toList rcoeffs
                  , val/=0 ])
 
-mineStates :: (Backend b,SMTMonad b ~ IO,Ord var) => IO b -> RSMState loc var
-              -> IO (RSMState loc var,[(Integer,[(var,Integer)])])
+mineStates :: (Backend b,SMTMonad b ~ IO,Ord var) => IO b -> RSM1State loc var
+              -> IO (RSM1State loc var, [(Integer, [(var,Integer)])])
 mineStates backend st
   = runStateT
     (do
@@ -165,7 +152,7 @@ mineStates backend st
                                   (rsmClasses loc)
                           return $ RSMLoc ncls
                       ) (rsmLocations st)
-        return $ RSMState nlocs (rsmStates st)
+        return $ RSM1State nlocs
     ) []
   where
     mineClass vars cls
@@ -203,3 +190,13 @@ mineStates backend st
                 Just (ncls,lines) -> return (Just (Set.insert coreLine1 $
                                                    Set.union coreLines2 ncls,lines))
                 Nothing -> return Nothing
+
+runRsm1 ::
+    (Backend b, SMTMonad b ~ IO, Ord var, Ord loc)
+    => IO b
+    -> loc
+    -> Map var Integer
+    -> RSM1State loc var
+    -> IO (RSM1State loc var, [(Integer, [(var,Integer)])])
+runRsm1 backend location state oldRsmState =
+    mineStates backend (addRSMState location state oldRsmState)

@@ -5,7 +5,7 @@ import Realization.Lisp.Array
 import Realization.Lisp.Value
 import Args
 import PartialArgs
-import RSM
+import RSM.RSM
 
 import Language.SMTLib2
 import Language.SMTLib2.Pipe.Internals hiding (Var)
@@ -808,11 +808,14 @@ instance (Show a, Show b) => C.ToField (Either a b) where
     toField (Right r) = BSL.toStrict $ BSL.fromString (show r)
     toField (Left l) = BSL.toStrict $ BSL.fromString (show l)
 
+instance Show a => C.ToField (Set a) where
+    toField set = BSL.toStrict $ BSL.fromString (show set)
+
 instance TransitionRelation LispProgram where
   type State LispProgram = LispState
   type Input LispProgram = LispState
   type RealizationProgress LispProgram = LispState
-  type PredicateExtractor LispProgram = RSMState (Set T.Text) (LispRev IntType)
+  type PredicateExtractor LispProgram = RSM (Set T.Text) (LispRev IntType)
   stateAnnotation = programState
   inputAnnotation = programInput
   initialState prog st
@@ -859,31 +862,25 @@ instance TransitionRelation LispProgram where
                                   (\_ -> undefined) expr
                           ) (programState prog))
       | expr <- programPredicates prog ]
-  defaultPredicateExtractor _ = return emptyRSM
+  defaultPredicateExtractor _ = return emptyRsm
   extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = liftIO $ do
-    (rsm2,lines) <- mineStates (createPipe "z3" ["-smt2","-in"]) rsm1
+    (newRsm, lines) <- runRsm rsm activePc ints (getStateFromDmap full)
     case mDumpStates of
       Nothing -> return ()
-      Just file ->
-          let pcAndStates = Map.toList . unpackCollectedStates $ rsmStates rsm2
-              pcStatePairs =
-                  concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
-          in BSL.writeFile file $
-             C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
-    return (rsm2,concat $ fmap (\ln -> [mkLine E.Ge ln
-                                       ,mkLine E.Gt ln]) lines)
+      Just file -> printStateToFile file (rsm_collectedStates newRsm)
+    return (newRsm,concat $ fmap (\ln -> [mkLine E.Ge ln
+                                         ,mkLine E.Gt ln]) lines)
     where
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
           map extrVal (DMap.toList full)
           where
             extrVal :: DSum LispName LispUVal -> Either Bool Integer
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValue bool)))) =
+            extrVal ((LispName _ _ _) :=> (LispU (Singleton (BoolValue bool)))) =
                 Left bool
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValue int)))) =
+            extrVal ((LispName _ _ _) :=> (LispU (Singleton (IntValue int)))) =
                 Right int
 
-      rsm1 = addRSMState activePc ints (activePc, getStateFromDmap full) rsm
       pcs = DMap.filterWithKey (\name val -> case DMap.lookup name (programState prog) of
                                    Just (Annotation ann) -> case Map.lookup "pc" ann of
                                      Just (L.Symbol "true") -> True
@@ -908,7 +905,7 @@ instance TransitionRelation LispProgram where
                   PValue (IntValue v) -> return [f idx v]
                   _ -> return [])
                 (return.concat)
-      
+
       mkLine :: E.OrdOp -> (Integer,[(LispRev IntType,Integer)])
              -> CompositeExpr LispState BoolType
       mkLine op (c,coeff)
@@ -930,6 +927,15 @@ instance TransitionRelation LispProgram where
                   rsum <- embed $ PlusLst sum
                   embed (Ord op c' rsum))
           (programState prog)
+
+      printStateToFile :: String -> CollectedStates (Set T.Text) -> IO ()
+      printStateToFile file collectedStates =
+          let pcAndStates = Map.toList . unpackCollectedStates $ collectedStates
+              pcStatePairs =
+                  concatMap (\(pc, states) -> map (\state -> (pc,state)) states) pcAndStates
+          in BSL.writeFile file $
+                 C.encode (map (\(pc,states) -> (C.toField pc) : (map C.toField states)) pcStatePairs)
+
   isEndState prog (LispState st)
     = embed (OrLst conds) >>= embed.Not
     where
@@ -946,6 +952,7 @@ instance TransitionRelation LispProgram where
                                    Just (L.Symbol "true") -> True
                                    _ -> False
                                ) st
+
 
 declareGate :: (Embed m e,GetType e)
             => (forall t. Maybe String -> e t -> m (e t))
