@@ -9,7 +9,6 @@ where
 
 import RSM.OldRsmModule
 
---import Data.Aeson as A
 import Data.Map (Map)
 import GHC.Generics as G
 import Language.SMTLib2.Pipe
@@ -21,8 +20,6 @@ newtype CollectedStates loc =
     { unpackCollectedStates :: Map loc [[Either Bool Integer]] }
     deriving G.Generic
 
---instance A.ToJSON loc => A.ToJSON (CollectedStates loc) where
-
 data RSM loc var =
     RSM { rsm_collectedStates :: CollectedStates loc
         , rsm_Rsm1State :: RSM1State loc var
@@ -33,7 +30,7 @@ emptyRsm :: RSM loc var
 emptyRsm = RSM (CollectedStates Map.empty) emptyRSM1 -- emptyNewRsmState
 
 runRsm ::
-    (Show loc, Ord loc, Ord var)
+    (Show loc, Ord loc, Show var, Ord var)
     => RSM loc var
     -> loc
     -> Map var Integer

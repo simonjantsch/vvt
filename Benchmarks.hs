@@ -16,6 +16,7 @@ import Turtle
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Yaml as Y
+
 import qualified Options.Applicative as OA
 
 newtype Benchmark = Benchmark { bm_toFilePath :: FilePath }

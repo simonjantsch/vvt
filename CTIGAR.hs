@@ -796,7 +796,7 @@ abstractGeneralize :: TR.TransitionRelation mdl
 abstractGeneralize level cube = do
   ic3DebugAct 3 $ do
     cubeStr <- renderAbstractState cube
-    liftIO $ hPutStrLn stderr $ "mic: "++cubeStr
+    liftIO $ hPutStrLn stderr $ "mic: "++cubeStr ++ " level: " ++ (show level)
   ncube <- mic level cube
   ic3DebugAct 3 $ do
     ncubeStr <- renderAbstractState ncube
@@ -950,9 +950,13 @@ check st opts verb stats dumpDomain dumpstats dumpstates = do
                                  Unpacked (TR.Input mdl))]
                         [Dom.AbstractState (TR.State mdl)])
     checkIt = do
+      stats <- gets ic3Stats
+      time <- liftIO $ getCurrentTime
+      let runTimeSoFar = fmap (diffUTCTime time) (fmap startTime stats)
       ic3DebugAct 1 (do
                         lvl <- k
-                        liftIO $ hPutStrLn stderr $ "Level "++show lvl)
+                        liftIO $
+                            hPutStrLn stderr $ "Level "++show lvl ++ "\ncurrent Time:" ++ (show runTimeSoFar) ++ "\n")
       extend
       sres <- strengthen
       case sres of
@@ -1154,6 +1158,7 @@ elimSpuriousTrans st level = do
                                 return (ndom,nord)
                              ) (domain,order) (interp++props)
   --liftIO $ domainDump ndomain >>= putStrLn
+  ic3Debug 5 $ "newOrder: " ++ (show norder)
   modify $ \env -> env { ic3Domain = ndomain
                        , ic3LitOrder = norder }
 
@@ -1307,9 +1312,11 @@ mic' :: TR.TransitionRelation mdl
 mic' level ast recDepth = do
   order <- gets ic3LitOrder
   attempts <- asks ic3MicAttempts
+  ic3Debug 4 $ "micAttempts: " ++ (show attempts)
   let sortedAst = Vec.fromList $ sortBy (\(k1,_) (k2,_)
                                          -> compareOrder order k1 k2) $
                   Vec.toList ast
+  ic3Debug 4 $ "sorted Ast: " ++ (show sortedAst)
   mic'' sortedAst 0 attempts
   where
     mic'' ast _ 0 = do
@@ -1656,7 +1663,6 @@ ic3DumpStats fp = do
        putStrLn $ "% unlifted: "++
          (show $ (round $ 100*(fromIntegral $ numUnliftedErased stats) /
                   (fromIntegral $ numErased stats) :: Int))
-
      dumpStats <- asks ic3DumpStatsFile
      case dumpStats of
        Nothing -> return ()

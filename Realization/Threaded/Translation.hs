@@ -58,6 +58,7 @@ toLispProgram rel = trace ("Reverse state: "++show stateSt) $
                                   , L.programInvariant = inv
                                   , L.programAssumption = []
                                   , L.programPredicates = []
+                                  , L.programVarDepMap = Map.empty
                                   }
   where
     init = reverseInit threadNames (llvmInit rel)

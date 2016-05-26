@@ -36,6 +36,7 @@ replaceVarWith (LispRev rname@(LispName sz tps name) val) nexpr prog = case val 
                                             (programAssumption prog)
                       , programPredicates = fmap (replaceInExpr rname ridx nname nexpr)
                                             (programPredicates prog)
+                      , programVarDepMap = (programVarDepMap prog)
                       }
   where
     adjustMap :: LispName '(lvl,tps) -> LispName '(lvl,tps')
