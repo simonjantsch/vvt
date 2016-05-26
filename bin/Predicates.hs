@@ -26,7 +26,7 @@ data Options = Options { addKarrPredicates :: Bool
 
 defaultOptions :: Options
 defaultOptions = Options { addKarrPredicates = False
-                         , addIneqPredicates = False
+                         , addIneqPredicates = True
                          , addBoolPredicates = True
                          , optShowHelp = False }
 
