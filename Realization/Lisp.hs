@@ -62,7 +62,6 @@ data LispProgram
                 , programInvariant :: [LispExpr BoolType]
                 , programAssumption :: [LispExpr BoolType]
                 , programPredicates :: [LispExpr BoolType]
-                , programVarDepMap :: Map AnyLispName (Set AnyLispName)
                 } deriving Show
 
 data LispGate (sig :: ([Type],Tree Type)) = LispGate { gateDefinition :: LispVar LispExpr sig
@@ -102,119 +101,6 @@ data LispExpr (t::Type) where
          -> LispExpr BoolType
   ExactlyOne :: [LispExpr BoolType] -> LispExpr BoolType
   AtMostOne :: [LispExpr BoolType] -> LispExpr BoolType
-
-data AnyLispName = forall a. AnyLispName (LispName a) LispVarCat
-
-instance Ord AnyLispName where
-    compare (AnyLispName n1 cat1) (AnyLispName n2 cat2) = defaultCompare n1 n2
-
-instance Eq AnyLispName where
-  AnyLispName n1 cat1 == AnyLispName n2 cat2 = defaultEq n1 n2 && cat1==cat2
-
-instance Show AnyLispName where
-    showsPrec p (AnyLispName n c) = showParen (p>10) $ showString "AnyLispName " . gshowsPrec 11 n . showChar ' ' . showsPrec 11 c
-
-data AnyGate = forall a. AnyGate (LispName a)
-
-instance Eq AnyGate where
-    AnyGate g1 == AnyGate g2 = defaultEq g1 g2
-
-instance Ord AnyGate where
-    compare (AnyGate g1) (AnyGate g2) = defaultCompare g1 g2
-
-buildVarDependencyGraph :: LispProgram -> Map AnyLispName (Set AnyLispName)
-buildVarDependencyGraph prog =
-    (\(_,_,c) -> c) $
-    execState
-        (mapM_ (\(k :=> v) ->
-                   do depList <- collectVariableDependencies v List.nil
-                      modify $ \(gateMap, _, depMap) ->
-                                   ( gateMap
-                                   , Set.empty
-                                   , Map.insert (AnyLispName k State) depList depMap)
-              ) (DMap.toList $ programNext prog)
-        ) (Map.empty, Set.empty, Map.empty)
-    where
-      collectVariableDependencies ::
-          LispVar LispExpr sz
-          -> List Natural idx
-          -> SM.State
-             (Map AnyGate (Set AnyLispName)
-             , Set AnyLispName
-             , Map AnyLispName (Set AnyLispName)
-             )
-             (Set AnyLispName)
-      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Input) _ =
-          return Set.empty
-      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) State) _ =
-          return $ Set.singleton (AnyLispName ln State)
-      collectVariableDependencies nv@(NamedVar ln@(LispName sz tps txt) Gate) _ =
-          let g = DMap.lookup ln (programGates prog)
-          in do state <- get
-                let gateMap = (\(a,_,_) -> a) state
-                case g of
-                  Just gate ->
-                      case Map.lookup (AnyGate ln) gateMap of
-                        Nothing ->
-                            do gateDeps <- collectVariableDependencies (gateDefinition gate) List.nil
-                               modify $ \(gateMap, b, c) -> (Map.insert (AnyGate ln) gateDeps gateMap, b, c)
-                               return gateDeps
-                        Just dependencies -> return dependencies
-                  Nothing -> return Set.empty
-
-      collectVariableDependencies lc@(LispConstr (LispValue _ exprs)) idx =
-          do relevantElements <- fmap snd $ Struct.access exprs idx (\el -> return ((), el))
-             Struct.flatten
-               (\(Sized e) -> collectFromExpression e)
-               (return . Set.unions)
-               relevantElements
-      collectVariableDependencies lIte@(LispITE cond th els) _ =
-          do condDeps <- collectFromExpression cond
-             thenDeps <- collectVariableDependencies th List.nil
-             elseDeps <- collectVariableDependencies els List.nil
-             return $ Set.unions [ condDeps
-                                 , thenDeps
-                                 , elseDeps
-                                 ]
-
-      collectFromExpression ::
-          LispExpr t
-          -> SM.State
-             (Map AnyGate (Set AnyLispName)
-             , Set AnyLispName
-             , Map AnyLispName (Set AnyLispName)
-             )
-             (Set AnyLispName)
-      collectFromExpression (LispExpr expr) =
-          do _ <- E.mapExpr
-                  return
-                  return
-                  return
-                  return
-                  return
-                  (\expr -> do subDeps <- collectFromExpression expr
-                               modify $ \(a, b, c) -> (a, Set.union subDeps b, c)
-                               return expr
-                  ) expr
-             state <- get
-             let currentExprDependencies = (\(_,b,_) -> b) state
-             modify $ \(gateMap, _, c) -> (gateMap, Set.empty, c)
-             return currentExprDependencies
-
-      collectFromExpression (LispRef var idx) =
-          collectVariableDependencies var idx
-      collectFromExpression (LispSize var _) =
-          collectVariableDependencies var List.nil -- hängt eigentlich nur von dem Size Parameter in var ab
-      collectFromExpression (LispEq var1 var2) =
-          do lhsDeps <- collectVariableDependencies var1 List.nil
-             rhsDeps <- collectVariableDependencies var2 List.nil
-             return $ Set.union lhsDeps rhsDeps
-      collectFromExpression (ExactlyOne exprs) =
-          do subDeps <- mapM collectFromExpression exprs
-             return $ Set.unions subDeps
-      collectFromExpression (AtMostOne exprs) =
-          do subDeps <- mapM collectFromExpression exprs
-             return $ Set.unions subDeps
 
 data LispSort = forall (sz :: [Type]) (tp::Tree Type).
                 LispSort (List Repr sz) (Struct Repr tp)
@@ -330,7 +216,7 @@ programToLisp :: LispProgram -> L.Lisp
 programToLisp prog = L.List (L.Symbol "program":elems)
   where
     elems = ann ++ states ++ inputs ++ gates ++ next ++ init ++
-            prop ++ invar ++ assump ++ preds ++ varDepMap
+            prop ++ invar ++ assump ++ preds
     ann = annToLisp (programAnnotation prog)
     states = if DMap.null (programState prog)
              then []
@@ -387,17 +273,6 @@ programToLisp prog = L.List (L.Symbol "program":elems)
             then []
             else [L.List (L.Symbol "predicates":preds')]
     preds' = [ lispExprToLisp p | p <- programPredicates prog ]
-    varDepMap = if null (programVarDepMap prog)
-                then []
-                else [L.List (L.Symbol "variableDependencies":varDepMap')]
-    varDepMap' = [ let varDeps =
-                           map (\ln@(AnyLispName (LispName _ _ name) _)
-                                    -> L.Symbol name
-                               ) (Set.toList depSet)
-                   in  L.List (L.Symbol name:[L.List varDeps])
-                 | (AnyLispName (LispName _ _ name) _, depSet) <-
-                     Map.toList (programVarDepMap prog)
-                 ]
 
 lispExprToLisp :: LispExpr t -> L.Lisp
 lispExprToLisp (LispExpr e)
@@ -553,7 +428,7 @@ parseProgram descr = case descr of
                       , programInvariant = invar
                       , programAssumption = assume
                       , programPredicates = preds
-                      , programVarDepMap = Map.empty}
+                      }
 
 parseAnnotation :: [L.Lisp] -> Map T.Text L.Lisp -> (Map T.Text L.Lisp,[L.Lisp])
 parseAnnotation [] cur = (cur,[])
@@ -1038,17 +913,6 @@ instance TransitionRelation LispProgram where
                   PValue (IntValue v) -> return [f idx v]
                   _ -> return [])
                 (return.concat)
-
-      -- mkLine' :: [(Integer, [(LispRev IntType, Integer)])]
-      --         -> CompositeExpr LispState BoolType
-      -- mkLine' [] = error "mkLine' was called with empty line"
-      -- mkLine' conj =
-      --   let listOfCompExpr = map (mkLine E.Ge) conj
-      --       expressions = map compositeExpr listOfCompExpr
-      --   in CompositeExpr
-      --      { compositeDescr = compositeDescr (head listOfCompExpr)
-      --      , compositeExpr = AndLst listOfCompExpr
-      --      }
 
       mkLine :: E.OrdOp -> (Integer,[(LispRev IntType,Integer)])
              -> CompositeExpr LispState BoolType
