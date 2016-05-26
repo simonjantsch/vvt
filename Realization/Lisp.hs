@@ -427,8 +427,7 @@ parseProgram descr = case descr of
                       , programInit = init
                       , programInvariant = invar
                       , programAssumption = assume
-                      , programPredicates = preds
-                      }
+                      , programPredicates = preds }
 
 parseAnnotation :: [L.Lisp] -> Map T.Text L.Lisp -> (Map T.Text L.Lisp,[L.Lisp])
 parseAnnotation [] cur = (cur,[])
@@ -753,7 +752,7 @@ parseLispValue state inps gates
     castVal sz e f = case isArrayed (getType e) sz $
                           \tp -> f tp (Sized e) of
                      Just res -> res
-
+               
 parseLispValue state inps gates expr f
   = parseLispExpr state inps gates Nothing expr $
     \e -> f (LispValue (Size Nil Nil) (Singleton (Sized e)))
@@ -913,7 +912,7 @@ instance TransitionRelation LispProgram where
                   PValue (IntValue v) -> return [f idx v]
                   _ -> return [])
                 (return.concat)
-
+      
       mkLine :: E.OrdOp -> (Integer,[(LispRev IntType,Integer)])
              -> CompositeExpr LispState BoolType
       mkLine op (c,coeff)

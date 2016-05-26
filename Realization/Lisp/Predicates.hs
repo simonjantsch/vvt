@@ -10,7 +10,6 @@ import Data.Foldable
 import Prelude hiding (foldl)
 import Data.GADT.Compare
 import Data.Functor.Identity
-import qualified Data.Map as Map
 
 ineqPredicates :: (Embed m e,GetType e) => [e IntType] -> m [e BoolType]
 ineqPredicates [] = return []

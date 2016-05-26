@@ -30,8 +30,8 @@ defaultOptions :: Options
 defaultOptions = Options { optBackends = defaultBackendOptions
                          , optShowHelp = False
                          , optTimeout = Nothing
-                         , optVerbosity = 2
-                         , optStats = True
+                         , optVerbosity = 0
+                         , optStats = False
                          , optDumpDomain = Nothing
                          , optDumpStats = Nothing
                          , optDumpStates = Nothing

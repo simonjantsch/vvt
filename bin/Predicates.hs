@@ -11,7 +11,6 @@ import Language.SMTLib2.Internals.Type (Repr(..))
 
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Typeable
 import System.Console.GetOpt
 import System.Environment
 import System.Exit
