@@ -21,6 +21,7 @@ Library
     Karr
     RSM.RSM
     RSM.OldRsmModule
+    RSM.NewRsmModule
     Realization
     Realization.Common
     Realization.Lisp

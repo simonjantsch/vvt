@@ -16,7 +16,6 @@ import Turtle
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Yaml as Y
-
 import qualified Options.Applicative as OA
 
 newtype Benchmark = Benchmark { bm_toFilePath :: FilePath }
@@ -181,11 +180,13 @@ runBench conf = do
                        trAsText = safeToText transitionRelation
                        verifyBinary = safeToText (binDir </> "vvt-verify")
                        logFile = safeToText (addExtension (logDir </> benchName bench) "log")
+                       collectedStatesLog = safeToText (addExtension (logDir </> benchName bench) "csv")
                    with (mktempfile "" "/tmp/") (\tmp -> do
                        let tmpFileForStats = safeToText tmp
                            cmdToExecute =
                                verifyBinary
                                 <> " --dump-stats-to " <> tmpFileForStats
+                                <> " --dump-states-to " <> collectedStatesLog
                                 <> _VERIFY_OPTS_
                                 <> " < " <> (T.pack $ show $ trAsText)
                                 <> " > " <> logFile

@@ -24,25 +24,25 @@ import Data.Dependent.Sum
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Map (Map)
-import Data.Maybe(catMaybes)
 import qualified Data.Map as Map
+import Data.Maybe (catMaybes)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Typeable
 import qualified Data.AttoLisp as L
 import qualified Data.Attoparsec.Number as L
-import System.IO (Handle)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.UTF8 as BSL
 import Data.Attoparsec
 import Control.Exception
 import Control.Monad.Trans.Except
-import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.State.Strict as SM
 import Control.Monad.Trans
 import Data.Functor.Identity
 import Data.Time.Clock
+
+import System.IO
 
 data LispName (sig :: ([Type],Tree Type)) where
   LispName :: List Repr sz -> Struct Repr tp -> T.Text -> LispName '(sz,tp)
@@ -1000,58 +1000,9 @@ instance TransitionRelation LispProgram where
     case mDumpStates of
       Nothing -> return ()
       Just file -> printStateToFile file (rsm_collectedStates newRsm)
-    return (newRsm,concat $ fmap (\ln -> [mkLine E.Ge ln
-                                         ,mkLine E.Gt ln]) lines)
+    return (newRsm, concatMap (concatMap (\ln -> [mkLine E.Ge ln
+                                                 ,mkLine E.Gt ln])) (Set.toList lines))
     where
-      relevantVars :: [AnyLispName]
-      relevantVars = catMaybes $ map extrVal (DMap.toList full)
-          where
-            extrVal :: DSum LispName LispUVal -> Maybe AnyLispName
-            extrVal (_ :=> (LispU (Singleton (BoolValue _)))) =
-                Nothing
-            extrVal (name :=> (LispU (Singleton (IntValue _)))) =
-                Just (AnyLispName name State)
-            extrVal _ = Nothing
-
-      relevantVarSubsets :: Map AnyLispName (Set AnyLispName) -> [Set AnyLispName]
-      relevantVarSubsets depMap =
-          concatMap filterRelevant . Map.toList $
-              Map.mapWithKey (\var deps ->
-                                  [ Set.insert var depSubset
-                                  | depSubset <- genSubsets deps
-                                  , not (null depSubset)
-                                  ]
-                             ) depMap
-      genSubsets set
-          | set == Set.empty = [Set.empty]
-          | otherwise =
-              let allSmallerSubsets = genSubsets (Set.deleteAt 0 set)
-              in (map (Set.insert (Set.elemAt 0 set)) allSmallerSubsets) ++ allSmallerSubsets
-
-      filterRelevant :: (AnyLispName, [Set AnyLispName]) -> [Set AnyLispName]
-      filterRelevant (_, alnSetList) =
-          filter (\s -> Set.size s > 1) $
-          map (Set.filter condition) alnSetList
-              where
-                condition name = name `elem` relevantVars
-
-      anyLispNameToLispRev :: AnyLispName -> [(LispRev IntType)]
-      anyLispNameToLispRev aln@(AnyLispName name _) =
-          case DMap.lookup name part of
-            Just (LispPVal' (LispP p)) ->
-                [ el |
-                  el <- pints (\idx val -> (LispRev name (RevVar idx))) p
-                ]
-            _ -> []
-
-      relevantLispRevs depMap =
-          Set.fromList $
-          filter (\l -> length l > 1) $
-          map
-          (\alnSet ->
-               Set.fromList $ concatMap anyLispNameToLispRev (Set.toList alnSet))
-          (relevantVarSubsets depMap)
-
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
           catMaybes $ map extrVal (DMap.toList full)
@@ -1087,6 +1038,17 @@ instance TransitionRelation LispProgram where
                   PValue (IntValue v) -> return [f idx v]
                   _ -> return [])
                 (return.concat)
+
+      -- mkLine' :: [(Integer, [(LispRev IntType, Integer)])]
+      --         -> CompositeExpr LispState BoolType
+      -- mkLine' [] = error "mkLine' was called with empty line"
+      -- mkLine' conj =
+      --   let listOfCompExpr = map (mkLine E.Ge) conj
+      --       expressions = map compositeExpr listOfCompExpr
+      --   in CompositeExpr
+      --      { compositeDescr = compositeDescr (head listOfCompExpr)
+      --      , compositeExpr = AndLst listOfCompExpr
+      --      }
 
       mkLine :: E.OrdOp -> (Integer,[(LispRev IntType,Integer)])
              -> CompositeExpr LispState BoolType
