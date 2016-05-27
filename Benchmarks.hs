@@ -244,6 +244,7 @@ addToAccumulatedStats newStats accumStats =
       , mrs_liftingNum = addToAccumStats mrs_liftingNum
       , mrs_initiationTime = addToAccumStats mrs_initiationTime
       , mrs_initiationNum = addToAccumStats mrs_initiationNum
+      , mrs_rsmTime = addToAccumStats mrs_rsmTime
       , mrs_numErased = addToAccumStats mrs_numErased
       , mrs_numCTI = addToAccumStats mrs_numCTI
       , mrs_numUnliftedErased = addToAccumStats mrs_numUnliftedErased
@@ -273,6 +274,7 @@ meanValsPrettyString stats benchmarkCount =
         ++ "liftingNum:" ++ showMean (fromIntegral . mrs_liftingNum) ++ "\n"
         ++ "initiationTime:" ++ showMean mrs_initiationTime ++ "\n"
         ++ "initiationNum:" ++ showMean (fromIntegral . mrs_initiationNum) ++ "\n"
+        ++ "rsmTime:" ++ showMean mrs_rsmTime
         ++ "numErased:" ++ showMean (fromIntegral . mrs_numErased) ++ "\n"
         ++ "numCTI:" ++ showMean (fromIntegral . mrs_numCTI) ++ "\n"
         ++ "numUnliftedErased:" ++ showMean (fromIntegral . mrs_numUnliftedErased) ++ "\n"
