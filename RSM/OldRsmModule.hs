@@ -41,8 +41,7 @@ addRSMState ::
     -> RSM1State loc var
     -> RSM1State loc var
 addRSMState loc instrs st
-  = st { rsmLocations = Map.map (\loc -> loc {rsmClasses = mergeClassesWithOverlappingVars 5 (rsmClasses loc)}) $
-                        Map.insertWith
+  = st { rsmLocations = Map.insertWith
                         joinLoc
                         loc
                         (RSMLoc { rsmClasses = Map.singleton (Map.keysSet instrs) (Set.singleton instrs)})
@@ -50,7 +49,9 @@ addRSMState loc instrs st
        }
   where
     joinLoc :: Ord var => RSMLoc var -> RSMLoc var -> RSMLoc var
-    joinLoc l1 l2 = RSMLoc { rsmClasses = Map.unionWith Set.union (rsmClasses l1) (rsmClasses l2)
+    joinLoc l1 l2 = RSMLoc { rsmClasses =
+                                 mergeClassesWithOverlappingVars 5 $
+                                     Map.unionWith Set.union (rsmClasses l1) (rsmClasses l2)
                            }
 mergeClassesWithOverlappingVars ::
     Ord var =>
