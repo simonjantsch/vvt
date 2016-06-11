@@ -79,6 +79,8 @@ data IC3Config mdl
            , ic3DumpDomainFile :: Maybe String
            , ic3DumpStatsFile :: Maybe String
            , ic3DumpStatesFile :: Maybe String
+           , ic3OnlyUseNewRSM :: Bool
+           , ic3OnlyUseOldRSM :: Bool
            }
 
 data IC3Env mdl
@@ -207,10 +209,12 @@ mkIC3Config :: mdl -> BackendOptions
             -> Int -- ^ Verbosity
             -> Bool -- ^ Dump stats?
             -> Maybe String -- ^ Dump domain?
-            -> Maybe String -- ^ Dump stats?
+            -> Maybe String -- ^ Dump stats to file?
             -> Maybe String -- ^ Dump states?
+            -> Bool -- ^ Only use newRSM
+            -> Bool -- ^ Only use OldRsm
             -> IC3Config mdl
-mkIC3Config mdl opts verb stats dumpDomain dumpStats dumpStates
+mkIC3Config mdl opts verb stats dumpDomain dumpStats dumpStates onlyNewRSM onlyOldRSM
   = IC3Cfg { ic3Model = mdl
            , ic3ConsecutionBackend = mkPipe (optBackend opts Map.! ConsecutionBackend)
                                      (fmap (\t -> ("cons",t)) $ Map.lookup ConsecutionBackend (optDebugBackend opts))
@@ -234,6 +238,8 @@ mkIC3Config mdl opts verb stats dumpDomain dumpStats dumpStates
            , ic3DumpDomainFile = dumpDomain
            , ic3DumpStatsFile = dumpStats
            , ic3DumpStatesFile = dumpStates
+           , ic3OnlyUseNewRSM = onlyNewRSM
+           , ic3OnlyUseOldRSM = onlyOldRSM
            }
   where
     mkPipe :: BackendUse -> Maybe (String,BackendDebug) -> AnyBackend IO
@@ -917,11 +923,13 @@ check :: TR.TransitionRelation mdl
          -> Maybe String -- ^ Dump domain?
          -> Maybe String -- ^ Dump stats?
          -> Maybe String -- ^ Dump states?
+         -> Bool -- ^only new Rsm?
+         -> Bool -- ^only old Rsm?
          -> IO (Either [(Unpacked (TR.State mdl),
                          Unpacked (TR.Input mdl))]
                        (CompositeExpr (TR.State mdl) BoolType))
-check st opts verb stats dumpDomain dumpstats dumpstates = do
-  runIC3 (mkIC3Config st opts verb stats dumpDomain dumpstats dumpstates) $ do
+check st opts verb stats dumpDomain dumpstats dumpstates onlyNewRSM onlyOldRSM = do
+  runIC3 (mkIC3Config st opts verb stats dumpDomain dumpstats dumpstates onlyNewRSM onlyOldRSM) $ do
     backend <- asks ic3BaseBackend
     tr <- liftIO $ withAnyBackend backend (baseCases st)
     case tr of
@@ -1137,11 +1145,15 @@ elimSpuriousTrans st level = do
   backend <- asks ic3BaseBackend
   extr <- gets ic3PredicateExtractor
   mbDumpStatesFile <- asks ic3DumpStatesFile
+  onlyUseNewRsm <- asks ic3OnlyUseNewRSM
+  onlyUseOldRsm <- asks ic3OnlyUseOldRSM
   rsmTimeBegin <- liftIO $ getCurrentTime
   (nextr,props) <- TR.extractPredicates mdl extr
                    (stateFull rst)
                    (stateLifted rst)
                    mbDumpStatesFile
+                   onlyUseNewRsm
+                   onlyUseOldRsm
   rsmTimeEnd <- liftIO $ getCurrentTime
   modify $ \env -> env { ic3PredicateExtractor = nextr }
   updateStats (\stats -> stats { numRefinements = (numRefinements stats)+1

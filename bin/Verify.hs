@@ -24,6 +24,8 @@ data Options = Options { optBackends :: BackendOptions
                        , optPrintFixpoint :: Bool
                        , optDumpStats :: Maybe String
                        , optDumpStates :: Maybe String
+                       , optOnlyNewRSM :: Bool
+                       , optOnlyOldRSM :: Bool
                        }
 
 defaultOptions :: Options
@@ -36,6 +38,8 @@ defaultOptions = Options { optBackends = defaultBackendOptions
                          , optDumpStats = Nothing
                          , optDumpStates = Nothing
                          , optPrintFixpoint = False
+                         , optOnlyNewRSM = False
+                         , optOnlyOldRSM = False
                          }
 
 allOpts :: [OptDescr (Options -> Options)]
@@ -76,6 +80,10 @@ allOpts
      "Dump the states that IC3 collects during refinement to a file. The states will be printed in csv format."
     ,Option [] ["print-fixpoint"]
      (NoArg $ \opt -> opt { optPrintFixpoint = True }) "If the program can be proven correct, output the fixpoint."
+    ,Option [] ["only-new-rsm"]
+     (NoArg $ \opt -> opt { optOnlyNewRSM = True }) "Only use NewRSM."
+    ,Option [] ["only-old-rsm"]
+     (NoArg $ \opt -> opt { optOnlyOldRSM = True }) "Only use OldRSM."
     ]
 
 parseTime :: String -> Int
@@ -138,6 +146,8 @@ main = do
                        (optDumpDomain opts)
                        (optDumpStats opts)
                        (optDumpStates opts)
+                       (optOnlyNewRSM opts)
+                       (optOnlyOldRSM opts)
             Just to -> do
               mainThread <- myThreadId
               timeoutThread <- forkOS (threadDelay to >> throwTo mainThread (ExitFailure (-2)))
@@ -149,6 +159,8 @@ main = do
                                       (optDumpDomain opts)
                                       (optDumpStats opts)
                                       (optDumpStates opts)
+                                      (optOnlyNewRSM opts)
+                                      (optOnlyOldRSM opts)
                                killThread timeoutThread
                                return (Just res)
                            )

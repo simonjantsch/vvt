@@ -61,6 +61,8 @@ class (PartialComp (State t),PartialComp (Input t))
                     -> Partial (State t)
                     -> Maybe String
                     -- ^ Dump collected states to a file?
+                    -> Bool -- ^ only use new RSM?
+                    -> Bool -- ^ only use Old RSM?
                     -> m (PredicateExtractor t,
                           [CompositeExpr (State t) BoolType])
   startingProgress :: t -> RealizationProgress t e

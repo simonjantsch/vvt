@@ -34,13 +34,24 @@ runRsm ::
     -> loc
     -> Map var Integer
     -> [(Either Bool Integer)]
+    -> Bool -- ^ only use newRSM
+    -> Bool -- ^ only use oldRSM
     -> IO (RSM loc var, Set ([(Integer, [(var,Integer)])]))
-runRsm oldRsmState loc partState fullState =
-    do (newRsm1, rsm1Preds) <-
-           runRsm1 (createPipe "z3" ["-smt2","-in"]) loc partState oldRsm1
-       let (newRsm2, rsm2Preds) = runRsm2 loc (Point partState) oldRsm2
-           newRsm = RSM newCollectedStates newRsm1 newRsm2
-       return $ (newRsm, Set.insert rsm1Preds $ rsm2Preds)
+runRsm oldRsmState loc partState fullState onlyNew onlyOld =
+    do (newRsm, newPreds) <-
+           case (onlyNew, onlyOld) of
+             (True, True) -> error "you cannot put both onlyNewRSM and onlyOldRSM on true"
+             (False, True) ->
+                 do (newRsm1, rsm1Preds) <- runOldRSM
+                    return $ (RSM newCollectedStates newRsm1 emptyRSM2, Set.singleton rsm1Preds)
+             (True, False) ->
+                 let (newRsm2, rsm2Preds) = runNewRSM
+                 in return $ (RSM newCollectedStates emptyRSM1 newRsm2, rsm2Preds)
+             _ ->
+                 do (newRsm1, rsm1Preds) <- runOldRSM
+                    let (newRsm2, rsm2Preds) = runNewRSM
+                    return $ (RSM newCollectedStates newRsm1 newRsm2, Set.insert rsm1Preds rsm2Preds)
+       return $ (newRsm, newPreds)
     where
       oldRsm1 = rsm_Rsm1State oldRsmState
       oldRsm2 = rsm_Rsm2State oldRsmState
@@ -51,3 +62,5 @@ runRsm oldRsmState loc partState fullState =
           loc
           [fullState]
           (unpackCollectedStates $ rsm_collectedStates oldRsmState)
+      runOldRSM = runRsm1 (createPipe "z3" ["-smt2","-in"]) loc partState oldRsm1
+      runNewRSM = runRsm2 loc (Point partState) oldRsm2

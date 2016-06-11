@@ -869,13 +869,18 @@ instance TransitionRelation LispProgram where
                           ) (programState prog))
       | expr <- programPredicates prog ]
   defaultPredicateExtractor _ = return emptyRsm
-  extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates = liftIO $ do
-    (newRsm, lines) <- runRsm rsm activePc ints (getStateFromDmap full)
-    case mDumpStates of
-      Nothing -> return ()
-      Just file -> printStateToFile file (rsm_collectedStates newRsm)
-    return (newRsm, concatMap (concatMap (\ln -> [mkLine E.Ge ln
-                                                 ,mkLine E.Gt ln])) (Set.toList lines))
+  extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates onlyNewRSM onlyOldRSM =
+      liftIO $ do
+        (newRsm, lines) <- runRsm rsm activePc ints (getStateFromDmap full) onlyNewRSM onlyOldRSM
+        case mDumpStates of
+          Nothing -> return ()
+          Just file -> printStateToFile file (rsm_collectedStates newRsm)
+        return (newRsm, concatMap (concatMap (\ln -> [mkLine E.Ge ln
+                                                     ,mkLine E.Gt ln
+                                                     ]
+                                             )
+                                  ) (Set.toList lines)
+               )
     where
       getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
       getStateFromDmap full =
