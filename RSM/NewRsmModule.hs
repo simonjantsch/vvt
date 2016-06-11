@@ -333,7 +333,7 @@ getNewLines newPoint points
                 in ( firstPointLineWithScore ++ linesByOtherPoints
                    , Map.unionWith Set.union pointsToAlter addPtsToAlter
                    )
-            Nothing -> ([], Map.empty)
+            Nothing -> getNewLines newPoint (Set.delete firstPoint points)
 
 -- | Reduces Point to the variables not in vars. If point is empty hereafter
 -- Nothing is returned
