@@ -195,8 +195,7 @@ data LispAction = TranslateGate T.Text
 
 instance (Show a, Show b) => C.ToField (Either a b) where
     toField (Right r) = BSL.toStrict $ BSL.fromString (show r)
-    toField (Left l) = BSL.toStrict $ BSL.fromString (show l)
-
+    toField (Left l) = BSL.toStrict $ BSL.fromString ("(" ++ show l ++ ")")
 
 instance Show a => C.ToField (Set a) where
     toField set = BSL.toStrict $ BSL.fromString (show set)
@@ -871,27 +870,44 @@ instance TransitionRelation LispProgram where
   defaultPredicateExtractor _ = return emptyRsm
   extractPredicates prog rsm (LispConcr full) (LispPart part) mDumpStates onlyNewRSM onlyOldRSM =
       liftIO $ do
-        (newRsm, lines) <- runRsm rsm activePc ints (getStateFromDmap full) onlyNewRSM onlyOldRSM
+        (newRsm, lines) <- runRsm rsm activePc ints onlyNewRSM onlyOldRSM
         case mDumpStates of
           Nothing -> return ()
           Just file -> printStateToFile file (rsm_collectedStates newRsm)
-        return (newRsm, concatMap (concatMap (\ln -> [mkLine E.Ge ln
-                                                     ,mkLine E.Gt ln
-                                                     ]
-                                             )
-                                  ) (Set.toList lines)
+        let newRSMWithCollectedStates =
+                newRsm {rsm_collectedStates = newCollectedStates newRsm (getStateFromDmap part) }
+        return ( newRSMWithCollectedStates
+               , concatMap (concatMap (\ln -> [mkLine E.Ge ln
+                                              ,mkLine E.Gt ln
+                                              ]
+                                      )
+                           ) (Set.toList lines)
                )
     where
-      getStateFromDmap :: DMap LispName LispUVal -> [Either Bool Integer]
-      getStateFromDmap full =
-          catMaybes $ map extrVal (DMap.toList full)
+      getStateFromDmap :: DMap LispName LispPVal' -> [Either Integer Integer]
+      getStateFromDmap partialState =
+          catMaybes $ map extrVal (DMap.toList partialState)
           where
-            extrVal :: DSum LispName LispUVal -> Maybe (Either Bool Integer)
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (BoolValue bool)))) =
-                Just $ Left bool
-            extrVal ((LispName _ _ name) :=> (LispU (Singleton (IntValue int)))) =
+            extrVal :: DSum LispName LispPVal' -> Maybe (Either Integer Integer)
+            extrVal (ln@(LispName _ _ _) :=> (LispPVal' (LispP (Singleton (NoPValue _))))) =
+                fmap Left (extractValueFromFullState ln)
+            extrVal ((LispName _ _ _) :=> (LispPVal' (LispP (Singleton (PValue (IntValue int)))))) =
                 Just $ Right int
             extrVal _ = Nothing
+
+      extractValueFromFullState :: LispName t -> Maybe Integer
+      extractValueFromFullState lispName =
+          case DMap.lookup lispName full of
+            Just (LispU (Singleton (IntValue int))) -> Just int
+            _ -> Nothing
+
+      newCollectedStates oldRsmState newState =
+          CollectedStates $
+          Map.insertWith
+          (\new_val old_val -> ((head new_val) : old_val))
+          activePc
+          [newState]
+          (unpackCollectedStates $ rsm_collectedStates oldRsmState)
 
       pcs = DMap.filterWithKey (\name val -> case DMap.lookup name (programState prog) of
                                    Just (Annotation ann) -> case Map.lookup "pc" ann of
@@ -917,7 +933,7 @@ instance TransitionRelation LispProgram where
                   PValue (IntValue v) -> return [f idx v]
                   _ -> return [])
                 (return.concat)
-      
+
       mkLine :: E.OrdOp -> (Integer,[(LispRev IntType,Integer)])
              -> CompositeExpr LispState BoolType
       mkLine op (c,coeff)
