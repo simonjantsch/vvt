@@ -7,7 +7,9 @@ module RSM.NewRsmModule
     )
 where
 
+import Control.Monad
 import Data.List (intersect, partition)
+import Data.List.Extra
 import Data.Map (Map)
 import Data.Maybe
 import Data.Ratio
@@ -15,6 +17,8 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Prelude hiding (mapM,sequence)
+
+import Safe
 
 newtype Point var = Point { pointToMap :: Map var Integer }
 
@@ -92,6 +96,9 @@ getSlopeBetweenPoints p1 p2 =
 getVars :: (Ord var) => Point var -> [var]
 getVars (Point varValMap) = Map.keys varValMap
 
+getVarsLine :: Ord var => Line var -> [var]
+getVarsLine (Line p0 _) = getVars p0
+
 commonVars :: (Ord var) => Point var -> Point var -> [var]
 commonVars p1 p2 = intersect (getVars p1) (getVars p2)
 
@@ -159,9 +166,10 @@ onLine :: (Ord var) => Point var -> Line var -> [var]
 onLine point line@(Line p0 (Slope lineSlope)) =
     let (Slope slopePointP0) = getSlopeBetweenPoints point p0
         (nonConstantVars, constantVars) =
-            (\(mbNonConst, mbConst) -> (catMaybes mbNonConst, catMaybes mbConst)) $
-            unzip $
-            map (\var ->
+            (\(mbNonConst, mbConst) ->
+                 (catMaybes mbNonConst, catMaybes mbConst)) $
+                 unzip $
+                 map (\var ->
                      let Just varDiffSlopeLine = Map.lookup var lineSlope
                          Just varDiffPointP0 = Map.lookup var slopePointP0
                      -- | Gather relevant variables out of the common variables.
@@ -175,7 +183,7 @@ onLine point line@(Line p0 (Slope lineSlope)) =
                          (NoDiff, (VarDiff _)) -> (Nothing, Nothing)
                          (NoDiff, NoDiff) -> (Nothing, Just var)
                          _ -> (Just var, Nothing)
-                ) (commonVars p0 point)
+                     ) (commonVars p0 point)
         allVarPairs = allDiffPairs nonConstantVars
         in
           constantVars ++
@@ -209,25 +217,28 @@ runRsm2 ::
     -> Point var
     -> RSM2State loc var
     -> (RSM2State loc var, Set [(Integer, [(var, Integer)])])
-runRsm2 loc point st =
-    case Set.member point (rsmLocPoints rsmLoc) of
+runRsm2 loc newPoint st =
+    case Set.member newPoint (rsmLocPoints rsmLoc) of
       True ->  (st, Set.empty)
       False ->
-        let onSomeLineAlready =
-                any
-                (\line -> onLine point line /= [])
-                (rsmProducedLines st)
+        let mbReducedPoint =
+                dropVars (Set.fromList (concatMap (onLine newPoint) (rsmProducedLines st))) newPoint
         in
-          if onSomeLineAlready
-            then (st, Set.empty)
-            else
-             let promoteOldCandidateLines =
+          case mbReducedPoint of
+            Nothing -> (st, Set.empty)
+            Just reducedPoint ->
+             let (promoteOldCandidateLines, varsOnCandidateLines) =
+                     unzip $
                      map (\(line, score) ->
-                              case onLine point line of
-                                [] -> (line, score)
-                                _ -> (line, score+1)
+                              case onLine reducedPoint line of
+                                [] -> ((line, score), [])
+                                vars -> ((line, score+1), vars)
                          ) (rsmLocCandidateLines rsmLoc)
-                 (newLines, newPoints) = getNewLinesAndDropPointsOnLines point (rsmLocPoints rsmLoc)
+                 mbPoint = dropVars (Set.fromList $ concat varsOnCandidateLines) reducedPoint
+                 (newLines, newPoints) =
+                     case mbPoint of
+                       Nothing -> ([], Set.empty)
+                       Just point -> getNewLinesAndDropPointsOnLines point (rsmLocPoints rsmLoc)
                  candidateLines = promoteOldCandidateLines ++ newLines
                  (linesToPromote, newCandidateLines) =
                      partition ((> 3) . snd) candidateLines
@@ -237,7 +248,7 @@ runRsm2 loc point st =
                      st { rsmLocations =
                               Map.insert
                               loc
-                              (RSMLoc (Set.insert point newPoints) newCandidateLines)
+                              (RSMLoc newPoints newCandidateLines)
                               (rsmLocations st)
                         , rsmProducedLines = (rsmProducedLines st) ++ (fst $ unzip linesToPromote)
                         }
@@ -256,7 +267,7 @@ runRsm2 loc point st =
           -> Set (Point var)
           -> ([(Line var, Integer)], Set (Point var))
       getNewLinesAndDropPointsOnLines newPoint points
-          | points == Set.empty = ([], Set.empty)
+          | points == Set.empty = ([], Set.singleton newPoint)
           | otherwise =
               let (newLines, ptsToAlter) = getNewLines newPoint points
                   newPoints =
@@ -268,52 +279,77 @@ runRsm2 loc point st =
                                                      dropOldPoint
                                                  Just newPoint ->
                                                      Set.insert newPoint dropOldPoint
-                                       ) points ptsToAlter
+                                       ) (Set.insert newPoint points) ptsToAlter
               in (newLines, newPoints)
-          where
-            getNewLines ::
-                Ord var
-                => Point var
-                -> Set (Point var)
-                -> ([(Line var, Integer)], Map (Point var) (Set var))
-            -- ^ Returns lines and a map indicating which variables
-            -- where used in lines for every point that is on some line
-            getNewLines newPoint points
-                | points == Set.empty = ([], Map.empty)
-                | otherwise =
-                    let firstPoint = Set.elemAt 0 points
-                        inducedLineByFirstPoint = inducedLine firstPoint newPoint
-                        (score, pointsToAlter) =
-                            Set.foldr (\pointToCheck sofar@(score, ptsWithVarsToDropSofar) ->
-                                           case onLine pointToCheck inducedLineByFirstPoint of
-                                             [] -> sofar
-                                             varsOnLine ->
-                                                 let updateVarsToDrop p =
-                                                         Map.insertWith Set.union p (Set.fromList varsOnLine)
-                                                 in
-                                                   ( score+1
-                                                   , updateVarsToDrop firstPoint $
-                                                     updateVarsToDrop pointToCheck $
-                                                     ptsWithVarsToDropSofar
-                                                   )
-                                      ) (0, Map.empty) (Set.delete firstPoint points)
-                        firstPointLineWithScore =
-                            case score of
-                              0 -> []
-                              nonEmptyScore ->
-                                  [(inducedLineByFirstPoint, nonEmptyScore+2)]
-                        (linesByOtherPoints, addPtsToAlter) =
-                            getNewLines newPoint (Set.delete firstPoint points)
-                    in ( firstPointLineWithScore ++ linesByOtherPoints
-                       , Map.unionWith Set.union pointsToAlter addPtsToAlter
-                       )
 
-            -- | Reduces Point to the variables not in vars. If point is empty hereafter
-            -- Nothing is returned
-            dropVars :: Ord var => (Set var) -> Point var -> Maybe (Point var)
-            dropVars vars point@(Point varValMap) =
-                let newVarValMap = Map.filterWithKey (\var _ -> not (Set.member var vars)) varValMap
-                in
-                  case null newVarValMap of
-                    True -> Nothing
-                    False -> Just $ Point newVarValMap
+getNewLines ::
+    Ord var
+   => Point var
+   -> Set (Point var)
+   -> ([(Line var, Integer)], Map (Point var) (Set var))
+      -- ^ Returns lines and a map indicating which variables
+      -- where used in lines for every point that is on some line
+getNewLines newPoint points
+    | points == Set.empty = ([], Map.empty)
+    | otherwise =
+        let firstPoint = Set.elemAt 0 points
+            inducedLineByFirstPoint = inducedLine firstPoint newPoint
+            (score, pointsToAlter) =
+                Set.foldr (\pointToCheck sofar@(score, ptsWithVarsToDropSofar) ->
+                               case onLine pointToCheck inducedLineByFirstPoint of
+                                 [] -> sofar
+                                 varsOnLine ->
+                                     let updateVarsToDrop p =
+                                             Map.insertWith Set.union p (Set.fromList varsOnLine)
+                                     in
+                                       ( score+1
+                                       , updateVarsToDrop firstPoint $
+                                         updateVarsToDrop pointToCheck $
+                                         updateVarsToDrop newPoint $
+                                         ptsWithVarsToDropSofar
+                                       )
+                          ) (0, Map.empty) (Set.delete firstPoint points)
+            candVarSetListWithPointsOnNumber =
+                Map.fromList $ Map.elems $
+                Map.map (\varSet1 ->
+                             ( varSet1
+                             , Map.size $
+                                  Map.filter
+                                  (\varSet2 -> varSet2 `Set.isSubsetOf` varSet1)
+                                  pointsToAlter
+                             )
+                        ) pointsToAlter
+            mbBestVarSet = fmap fst (lastMay $ sortOn snd (Map.toList candVarSetListWithPointsOnNumber))
+        in
+          case join $ fmap (flip reduceLineToVars inducedLineByFirstPoint) mbBestVarSet of
+            Just reducedLine ->
+                let firstPointLineWithScore =
+                        case score of
+                          0 -> []
+                          nonEmptyScore ->
+                              [(reducedLine, nonEmptyScore+2)]
+                    (linesByOtherPoints, addPtsToAlter) =
+                        getNewLines newPoint (Set.delete firstPoint points)
+                in ( firstPointLineWithScore ++ linesByOtherPoints
+                   , Map.unionWith Set.union pointsToAlter addPtsToAlter
+                   )
+            Nothing -> ([], Map.empty)
+
+-- | Reduces Point to the variables not in vars. If point is empty hereafter
+-- Nothing is returned
+dropVars :: Ord var => Set var -> Point var -> Maybe (Point var)
+dropVars vars point@(Point varValMap) =
+    let newVarValMap = Map.filterWithKey (\var _ -> not (Set.member var vars)) varValMap
+    in
+      case null newVarValMap of
+        True -> Nothing
+        False -> Just $ Point newVarValMap
+
+reduceLineToVars :: Ord var => Set var -> Line var -> Maybe (Line var)
+reduceLineToVars vars line@(Line p0 (Slope slope)) =
+    let reducedPoint = reducePointToVars (linePointOnLine line) (Set.toList vars)
+    in case null (pointToMap reducedPoint) of
+         True -> Nothing
+         False -> Just $ Line reducedPoint reducedSlope
+    where
+      reducedSlope = Slope $ Map.filterWithKey (\var _ -> elem var vars) slope
