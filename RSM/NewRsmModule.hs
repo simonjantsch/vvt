@@ -212,7 +212,7 @@ onLine point line@(Line p0 (Slope lineSlope)) =
                      -- from the common variables.
                      in
                        case (varDiffSlopeLine, varDiffPointP0) of
-                         ((VarDiff _), NoDiff) -> (Nothing, Nothing)
+                         ((VarDiff _), NoDiff) -> (Nothing, Just var)
                          (NoDiff, (VarDiff _)) -> (Nothing, Nothing)
                          (NoDiff, NoDiff) -> (Nothing, Just var)
                          _ -> (Just var, Nothing)
@@ -221,13 +221,22 @@ onLine point line@(Line p0 (Slope lineSlope)) =
         in
           constantVars ++
           foldr (\(var1, var2) sofar ->
-                   let Just dxdySl1 = getCorrespSlope (var1, var2) (Slope lineSlope)
-                       Just dxdySl2 = getCorrespSlope (var1, var2) (Slope slopePointP0)
-                   in
-                     if dxdySl1 == dxdySl2 || dxdySl1 == -dxdySl2
-                     then var1 : var2 : sofar
-                     else sofar
-              ) [] allVarPairs
+                   let Just var1Diff = Map.lookup var1 slopePointP0
+                       Just var2Diff = Map.lookup var2 slopePointP0
+                   in case (var1Diff, var2Diff) of
+                        (NoDiff, NoDiff) -> var1 : var2 : sofar
+                        -- ^ If the values of point coincide exactly with the values of p0
+                        -- in a pair of variables, point is on every line that goes through
+                        -- p0 in these variables
+                        (VarDiff _, VarDiff _) ->
+                            let Just dxdySl1 = getCorrespSlope (var1, var2) (Slope lineSlope)
+                                Just dxdySl2 = getCorrespSlope (var1, var2) (Slope slopePointP0)
+                            in
+                              if dxdySl1 == dxdySl2 -- || dxdySl1 == -dxdySl2 -- TODO: assure that this is right!
+                                then var1 : var2 : sofar
+                                else sofar
+                        _ -> sofar
+                ) [] allVarPairs
     where
       getCorrespSlope :: (Ord var) => (var, var) -> Slope var -> Maybe Rational
       getCorrespSlope (var1, var2) (Slope slope) =
