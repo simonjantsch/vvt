@@ -8,7 +8,6 @@ module RSM.NewRsmModule
 where
 
 import Control.Monad
-import Data.List (intersect, partition)
 import Data.List.Extra
 import Data.Map (Map)
 import Data.Maybe
@@ -17,10 +16,16 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Prelude hiding (mapM,sequence)
+import Test.QuickCheck
 
 import Safe
 
 newtype Point var = Point { pointToMap :: Map var Integer }
+
+instance Arbitrary (Point Char) where
+    arbitrary = do
+      vals <- arbitrary
+      return $ Point (Map.fromList $ zip "abcd" vals)
 
 instance Eq var => Eq (Point var) where
     p1 == p2 =
@@ -36,16 +41,41 @@ instance Show var => Show (Point var) where
 data VarDiff = VarDiff Integer
              | NoDiff deriving Show
 
+instance Arbitrary VarDiff where
+    arbitrary = do
+        i <- arbitrary :: Gen Int
+        if (i `mod` 2) == 0
+          then
+              do val <- arbitrary
+                 if val == 0
+                   then return NoDiff
+                   else return $ VarDiff val
+          else return NoDiff
+
 newtype Slope var = Slope (Map var VarDiff)
 
 instance Show var => Show (Slope var) where
     show (Slope sl) = show sl
+
+instance Arbitrary (Slope Char) where
+    arbitrary = do
+      vals <- arbitrary
+      return $ Slope $ Map.fromList (zip "abcd" vals)
 
 data Line var =
     Line
     { linePointOnLine :: Point var
     , lineSlope :: Slope var
     }
+
+instance Arbitrary (Line Char) where
+    arbitrary = do
+      arbitraryPoint <- arbitrary
+      arbitrarySlope <- arbitrary
+      if getVarsSlope arbitrarySlope == getVars arbitraryPoint
+        then return $ Line arbitraryPoint arbitrarySlope
+        else arbitrary
+
 
 instance Show var => Show (Line var) where
     show line =
@@ -98,6 +128,9 @@ getVars (Point varValMap) = Map.keys varValMap
 
 getVarsLine :: Ord var => Line var -> [var]
 getVarsLine (Line p0 _) = getVars p0
+
+getVarsSlope :: Ord var => Slope var -> [var]
+getVarsSlope (Slope varVarDiffMap) = Map.keys varVarDiffMap
 
 commonVars :: (Ord var) => Point var -> Point var -> [var]
 commonVars p1 p2 = intersect (getVars p1) (getVars p2)
@@ -210,7 +243,6 @@ onLine point line@(Line p0 (Slope lineSlope)) =
       allDiffPairs (x:[]) = []
       allDiffPairs (x:xs) = [(x, y) | y <- xs] ++ (allDiffPairs xs)
 
--- TODO Find a better solution for collected states here
 runRsm2 ::
     (Ord loc,Ord var, Show var)
     => loc
@@ -353,3 +385,18 @@ reduceLineToVars vars line@(Line p0 (Slope slope)) =
          False -> Just $ Line reducedPoint reducedSlope
     where
       reducedSlope = Slope $ Map.filterWithKey (\var _ -> elem var vars) slope
+
+prop_onLine1 :: Line Char -> Property
+prop_onLine1 l1 =
+    (==>) (nonConstantVars l1 > 2) (onLine (linePointOnLine l1) l1 == getVarsLine l1)
+
+nonConstantVars line =
+    length (getNonconstVarsLine line)
+    where
+      getNonconstVarsLine (Line _ (Slope vardiffMap)) =
+          map fst $
+          filter (\(_, vardiff) ->
+                 case vardiff of
+                   NoDiff -> False
+                   VarDiff _ -> True
+                 ) (Map.toList vardiffMap)
