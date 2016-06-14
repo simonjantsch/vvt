@@ -39,7 +39,7 @@ instance Show var => Show (Point var) where
     show p = show (pointToMap p)
 
 data VarDiff = VarDiff Integer
-             | NoDiff deriving Show
+             | NoDiff deriving (Show, Eq)
 
 instance Arbitrary VarDiff where
     arbitrary = do
@@ -212,30 +212,39 @@ onLine point line@(Line p0 (Slope lineSlope)) =
                      -- from the common variables.
                      in
                        case (varDiffSlopeLine, varDiffPointP0) of
-                         ((VarDiff _), NoDiff) -> (Nothing, Just var)
+                         -- | If the point has the same value as p0, it
+                         -- might be on the line (t = 0) if another variables
+                         -- coincides with p0
+                         ((VarDiff _), NoDiff) -> (Just var, Nothing)
+                         -- | If the slope of the line is constant in the
+                         -- variable, but the value of the point differs
+                         -- from p0, point is not on the line in var.
                          (NoDiff, (VarDiff _)) -> (Nothing, Nothing)
+                         -- | The slope is constant and the value of point
+                         -- is equal to p0 -> var is on line
                          (NoDiff, NoDiff) -> (Nothing, Just var)
+                         -- | Both slope and p0-point are nonzero,
+                         -- the variable is saved for further check
                          _ -> (Just var, Nothing)
                      ) (commonVars p0 point)
         allVarPairs = allDiffPairs nonConstantVars
         in
           constantVars ++
           foldr (\(var1, var2) sofar ->
-                   let Just var1Diff = Map.lookup var1 slopePointP0
-                       Just var2Diff = Map.lookup var2 slopePointP0
-                   in case (var1Diff, var2Diff) of
-                        (NoDiff, NoDiff) -> var1 : var2 : sofar
-                        -- ^ If the values of point coincide exactly with the values of p0
-                        -- in a pair of variables, point is on every line that goes through
-                        -- p0 in these variables
-                        (VarDiff _, VarDiff _) ->
-                            let Just dxdySl1 = getCorrespSlope (var1, var2) (Slope lineSlope)
-                                Just dxdySl2 = getCorrespSlope (var1, var2) (Slope slopePointP0)
-                            in
-                              if dxdySl1 == dxdySl2 -- || dxdySl1 == -dxdySl2 -- TODO: assure that this is right!
-                                then var1 : var2 : sofar
-                                else sofar
-                        _ -> sofar
+                     let mbDxdySl1 = getCorrespSlope (var1, var2) (Slope lineSlope)
+                         mbDxdySl2 = getCorrespSlope (var1, var2) (Slope slopePointP0)
+                     in
+                       case (mbDxdySl1, mbDxdySl2) of
+                         -- | point coincides with p0 in two variables
+                         (Just 0, _) -> var1 : var2 : sofar
+                         -- | two rational slopes, check if equal
+                         (Just dxdySl1, Just dxdySl2) ->
+                             if dxdySl1 == dxdySl2
+                               then var1 : var2 : sofar
+                               else sofar
+                         -- | point coincides with p0 in one variable but not
+                         -- in the other -> not on line in (var1, var2)
+                         _ -> sofar
                 ) [] allVarPairs
     where
       getCorrespSlope :: (Ord var) => (var, var) -> Slope var -> Maybe Rational
@@ -246,6 +255,8 @@ onLine point line@(Line p0 (Slope lineSlope)) =
             case (mbVar1Diff, mbVar2Diff) of
               (Just (VarDiff var1Diff), Just (VarDiff var2Diff)) ->
                   Just $ var1Diff % var2Diff
+              (Just NoDiff, Just NoDiff) ->
+                  Just 0
               _ -> Nothing
 
       allDiffPairs [] = []
@@ -340,8 +351,14 @@ getNewLines newPoint points
                                case onLine pointToCheck inducedLineByFirstPoint of
                                  [] -> sofar
                                  varsOnLine ->
-                                     let updateVarsToDrop p =
-                                             Map.insertWith Set.union p (Set.fromList varsOnLine)
+                                     let relevantVars =
+                                             filterVars
+                                               pointToCheck
+                                               newPoint
+                                               inducedLineByFirstPoint
+                                               varsOnLine
+                                         updateVarsToDrop p =
+                                             Map.insertWith Set.union p (Set.fromList relevantVars)
                                      in
                                        ( score+1
                                        , updateVarsToDrop firstPoint $
@@ -375,6 +392,25 @@ getNewLines newPoint points
                    , Map.unionWith Set.union pointsToAlter addPtsToAlter
                    )
             Nothing -> getNewLines newPoint (Set.delete firstPoint points)
+    where
+      -- | A variable is relevant, if it is constant on the line and values coincide,
+      -- or if is on the line, the slope is not constant and values do not coincide with
+      -- either of the points that induced the line (p0 and newPoint)
+      -- Without this check for example the points
+      -- (0,0), (1,1), (0,0) would trigger a new line, because the third point lies on
+      -- the line induced by the first two. This is unwanted though, we want either
+      -- three constant values of the variables, or three nonconstant with the
+      -- same slope
+      filterVars :: Ord var => Point var -> Point var -> Line var -> [var] -> [var]
+      filterVars pointToCheck newPoint (Line p0 (Slope slope)) =
+          filter (\var ->
+                      let Just valPTC = getPointValue pointToCheck var
+                          Just valP0 = getPointValue p0 var
+                          Just valNP = getPointValue newPoint var
+                          isConstant = (Map.lookup var slope == Just NoDiff)
+                      in isConstant || (valP0 /= valPTC && valNP /= valPTC)
+                 )
+
 
 -- | Reduces Point to the variables not in vars. If point is empty hereafter
 -- Nothing is returned
@@ -389,9 +425,19 @@ dropVars vars point@(Point varValMap) =
 reduceLineToVars :: Ord var => Set var -> Line var -> Maybe (Line var)
 reduceLineToVars vars line@(Line p0 (Slope slope)) =
     let reducedPoint = reducePointToVars (linePointOnLine line) (Set.toList vars)
-    in case null (pointToMap reducedPoint) of
-         True -> Nothing
-         False -> Just $ Line reducedPoint reducedSlope
+        lineSize = Map.size (pointToMap reducedPoint)
+    in case lineSize of
+         0 -> Nothing
+         1 ->
+             -- | if only one variables is left, check if it is a constant. If yes,
+             -- accept the line, otherwise refute it, because lines in one non-constant
+             -- variable are senseless
+             let (var, _) = Map.elemAt 0 (pointToMap reducedPoint)
+             in case Map.lookup var slope of
+                  Just NoDiff -> Just $ Line reducedPoint reducedSlope
+                  Just (VarDiff _) -> Nothing
+                  _ -> Nothing
+         _ -> Just $ Line reducedPoint reducedSlope
     where
       reducedSlope = Slope $ Map.filterWithKey (\var _ -> elem var vars) slope
 
