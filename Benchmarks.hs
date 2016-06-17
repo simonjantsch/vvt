@@ -162,7 +162,7 @@ runBench conf = do
                                      True ->
                                          vvtBinary
                                          <> " encode -o " <> dest
-                                         <> " --ineq "
+                                         <> " "
                                          <> benchAsTxt
                                          <> " > /dev/null" <> " 2>&1"
                                      False ->
@@ -171,7 +171,7 @@ runBench conf = do
                                          <> benchAsTxt
                                          <> " | " <> vvtenc
                                          <> " 2>/dev/null "
-                                         <> " | " <> vvtpreds <> " --ineq"
+                                         <> " | " <> vvtpreds <> " "
                                          <> " | " <> vvtpp
                                          <> " 1> " <> dest
                            in do
